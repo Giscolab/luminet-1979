@@ -27,12 +27,16 @@
   uniform float iBend;
   uniform float iSpin;
   uniform float iQuality;
+  uniform float iFovX;
+  uniform vec3 iCamVel;
+  uniform float iFogStrength;
 
   #define PI 3.141592653589793
   #define ISCO 6.0
   #define BC 5.196152
   #define HORIZON 2.0
-  #define MAX_STEPS 220
+  #define MAX_STEPS 300
+  #define SKY_RADIUS 180.0
 
   float hash(vec2 p){ return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453); }
   float redshift(float r,float phi,float incl){ float v=1.0/sqrt(max(r-3.0,0.001)); return max((1.0+v*cos(phi)*sin(incl))/sqrt(max(1.0-3.0/r,0.001)),0.001); }
@@ -55,6 +59,38 @@
   vec3 tempColor(float T){ T=clamp(T,0.0,1.0); vec3 c0=vec3(0.5,0.0,0.0), c1=vec3(1.0,0.2,0.0), c2=vec3(1.0,0.72,0.2), c3=vec3(1.0,0.98,0.9), c4=vec3(0.72,0.85,1.0); if(T<0.25) return mix(c0,c1,T/0.25); else if(T<0.55) return mix(c1,c2,(T-0.25)/0.30); else if(T<0.80) return mix(c2,c3,(T-0.55)/0.25); else return mix(c3,c4,(T-0.80)/0.20); }
   vec3 aces(vec3 x){ const float a=2.51,b=0.03,c=2.43,d=0.59,e=0.14; return clamp((x*(a*x+b))/(x*(c*x+d)+e),0.0,1.0); }
   vec3 bloom(vec3 col,float intensity){ float l=dot(col,vec3(0.2126,0.7152,0.0722)); if(l>0.8) col+=vec3(0.4,0.3,0.2)*(l-0.8)*2.0*intensity; return col; }
+
+  vec3 aberrateDirection(vec3 dir, vec3 vel){
+    float beta = clamp(length(vel), 0.0, 0.92);
+    if (beta < 1e-4) return normalize(dir);
+    vec3 n = vel / beta;
+    float gamma = inversesqrt(max(1.0 - beta * beta, 1e-4));
+    float dPar = dot(dir, n);
+    vec3 par = n * dPar;
+    vec3 perp = dir - par;
+    float denom = 1.0 + beta * dPar;
+    return normalize((perp / gamma + par + beta * n) / max(denom, 1e-4));
+  }
+
+  float dopplerFactor(vec3 lightDir, vec3 vel){
+    float beta = clamp(length(vel), 0.0, 0.92);
+    if (beta < 1e-4) return 1.0;
+    vec3 n = vel / beta;
+    float gamma = inversesqrt(max(1.0 - beta * beta, 1e-4));
+    float mu = dot(-normalize(lightDir), n);
+    return 1.0 / max(gamma * (1.0 - beta * mu), 1e-3);
+  }
+
+  vec3 applyDopplerTint(vec3 col, float doppler){
+    float blueShift = clamp(doppler - 1.0, 0.0, 1.2);
+    float redShift = clamp(1.0 - doppler, 0.0, 1.2);
+    vec3 blue = vec3(0.78, 0.9, 1.15);
+    vec3 red = vec3(1.2, 0.74, 0.55);
+    col *= mix(vec3(1.0), blue, blueShift * 0.6);
+    col *= mix(vec3(1.0), red, redShift * 0.55);
+    col *= mix(0.65, 1.55, clamp(doppler, 0.45, 1.55) - 0.45);
+    return col;
+  }
 
   vec3 geoAccel(vec3 pos, vec3 dir, float L2){
     float r = max(length(pos), 0.001);
@@ -90,24 +126,62 @@
     dir = normalize(dir + h * (k1v + 2.0*k2v + 2.0*k3v + k4v) / 6.0);
   }
 
-  bool traceDisk(vec3 ro, vec3 rd, out vec3 hit, out vec3 hitDir, out float bMin){
+  vec3 skyColor(vec3 dir){
+    vec3 d = normalize(dir);
+    float phi = atan(d.z, d.x);
+    float theta = acos(clamp(d.y, -1.0, 1.0));
+
+    vec2 uv = vec2(phi / (2.0 * PI) + 0.5, theta / PI);
+    vec2 g = floor(uv * vec2(180.0, 90.0));
+
+    float cluster = hash(g);
+    float stars = step(0.994, cluster) * (0.25 + 0.75 * hash(g * 0.73 + 9.1));
+
+    float milkyBand = exp(-pow((uv.y - 0.5) * 7.0, 2.0));
+    float dustBand = hash(g * vec2(1.3, 2.1) + 17.0) * milkyBand;
+
+    vec3 nebula = mix(vec3(0.03, 0.035, 0.055), vec3(0.08, 0.06, 0.04), dustBand * 0.8);
+    vec3 starTint = mix(vec3(0.85, 0.9, 1.0), vec3(1.0, 0.88, 0.72), hash(g + 3.7));
+
+    return nebula + starTint * stars * (0.7 + 0.3 * milkyBand);
+  }
+
+  bool traceScene(vec3 ro, vec3 rd, out vec3 hit, out vec3 hitDir, out vec3 skyDir, out float bMin, out bool swallowed, out float fogOptical, out float fogGlow){
     vec3 pos = ro;
     vec3 dir = rd;
     float L2 = dot(cross(ro, rd), cross(ro, rd));
     float prevY = pos.y;
     bMin = 1e9;
+    swallowed = false;
+    skyDir = rd;
+    fogOptical = 0.0;
+    fogGlow = 0.0;
 
     for (int i = 0; i < MAX_STEPS; i++) {
       if (float(i) > mix(90.0, float(MAX_STEPS), iQuality)) break;
 
       float r = length(pos);
       bMin = min(bMin, length(cross(pos, dir)));
-      if (r < HORIZON) return false;
-      if (r > 130.0) return false;
+      float asymH = HORIZON * (1.0 - 0.12 * iSpin * clamp(pos.x / max(r, 1e-3), -1.0, 1.0));
+      if (r < clamp(asymH, 1.55, 2.45)) {
+        swallowed = true;
+        return false;
+      }
+      if (r > SKY_RADIUS) {
+        skyDir = normalize(pos);
+        return false;
+      }
 
       float stepFar = mix(0.45, 1.4, clamp((r - 8.0) / 55.0, 0.0, 1.0));
       float h = stepFar / mix(1.5, 0.7, iQuality);
       h *= mix(1.0, 0.72, clamp(10.0 / max(r, 0.1), 0.0, 1.0));
+
+      float diskBand = exp(-abs(pos.y) / max(iDiskHalfThickness * 1.8, 0.05));
+      float radial = 1.0 - smoothstep(ISCO * 0.9, iRout * 1.4, length(pos.xz));
+      float hotInner = exp(-pow((length(pos.xz) - (ISCO + 1.0)) * 0.45, 2.0));
+      float fogDensity = diskBand * radial;
+      fogOptical += fogDensity * h * 0.13 * iFogStrength;
+      fogGlow += fogDensity * (0.16 + 0.95 * hotInner) * h * iFogStrength;
 
       vec3 prevPos = pos;
       vec3 prevDir = dir;
@@ -124,24 +198,38 @@
       }
       prevY = pos.y;
     }
+    skyDir = normalize(pos);
     return false;
   }
 
   void main(){
     vec2 p=(gl_FragCoord.xy-0.5*iResolution.xy)/iResolution.y;
-    vec2 uv=p*30.0;
-
-    vec3 rdCam = normalize(vec3(p.x, p.y, 1.75));
+    float focal = 0.5 * (iResolution.x / iResolution.y) / tan(radians(iFovX) * 0.5);
+    vec3 rdCam = normalize(vec3(p.x, p.y, focal));
     vec3 rayDir = normalize(iCamRight * rdCam.x + iCamUp * rdCam.y + iCamForward * rdCam.z);
-
-    float twink=sin(iTime*2.0+gl_FragCoord.x*0.01)*0.2+0.8;
-    float stars=step(0.985,hash(floor(uv*18.0)))*(0.3+0.7*hash(uv*37.3))*twink;
-    vec3 bg=vec3(stars*0.8,stars*0.85,stars);
+    rayDir = aberrateDirection(rayDir, iCamVel);
 
     vec3 hit = vec3(0.0);
     vec3 hitDir = vec3(0.0);
+    vec3 skyDir = vec3(0.0);
     float bMin;
-    bool seenDisk = traceDisk(iCamPos, rayDir, hit, hitDir, bMin);
+    float fogOptical = 0.0;
+    float fogGlow = 0.0;
+    bool swallowed = false;
+    bool seenDisk = traceScene(iCamPos, rayDir, hit, hitDir, skyDir, bMin, swallowed, fogOptical, fogGlow);
+
+    vec3 bg = skyColor(skyDir);
+    float skyD = dopplerFactor(skyDir, iCamVel);
+    bg = applyDopplerTint(bg, skyD);
+
+    if (swallowed) {
+      float photonRing = exp(-pow((bMin - BC) * 3.5, 2.0));
+      bg = vec3(0.0);
+      bg += vec3(0.95, 0.66, 0.35) * photonRing * 0.45;
+      bg = applyDopplerTint(bg, dopplerFactor(rayDir, iCamVel));
+      fragColor = vec4(pow(bg, vec3(1.0 / 2.2)), 1.0);
+      return;
+    }
 
     if (!seenDisk && bMin < BC) {
       float edge=smoothstep(BC,BC-0.5,bMin);
@@ -153,6 +241,10 @@
 
     vec3 col=bg;
     col+=vec3(0.9,0.6,0.3)*exp(-pow((bMin-BC)*1.3,2.0))*0.08;
+
+    float fogTransmittance = exp(-fogOptical);
+    col *= fogTransmittance;
+    col += vec3(1.05, 0.72, 0.45) * fogGlow * 0.11;
 
     if(seenDisk){
       float rHit = length(hit.xz);
@@ -171,12 +263,14 @@
 
       float thicknessFade = smoothstep(iDiskHalfThickness, 0.0, abs(hit.y));
       float dopplerAniso = 0.75 + 0.25 * clamp(dot(normalize(vec3(-hit.z,0.0,hit.x)), -hitDir), -1.0, 1.0);
-      col += (c1 + c2) * thicknessFade * dopplerAniso;
+      vec3 diskCol = (c1 + c2) * thicknessFade * dopplerAniso;
+      diskCol = applyDopplerTint(diskCol, dopplerFactor(hitDir, iCamVel));
+      col += diskCol;
     }
 
     col=aces(col*1.2);
     if(iBloom>0.5) col=bloom(col,1.0);
-    float vignette=1.0-0.2*length(uv/30.0);
+    float vignette=1.0-0.2*length(p*1.1);
     col*=vignette;
     col=pow(col,vec3(1.0/2.2));
     fragColor=vec4(col,1.0);
@@ -223,6 +317,9 @@
   const uBend = gl.getUniformLocation(prog, 'iBend');
   const uSpin = gl.getUniformLocation(prog, 'iSpin');
   const uQuality = gl.getUniformLocation(prog, 'iQuality');
+  const uFovX = gl.getUniformLocation(prog, 'iFovX');
+  const uCamVel = gl.getUniformLocation(prog, 'iCamVel');
+  const uFogStrength = gl.getUniformLocation(prog, 'iFogStrength');
 
   const incVal = document.getElementById('incVal');
   const routVal = document.getElementById('routVal');
@@ -247,6 +344,7 @@
   const spinSliderVal = document.getElementById('spinSliderVal');
   const qualitySlider = document.getElementById('qualitySlider');
   const qualitySliderVal = document.getElementById('qualitySliderVal');
+  const followOrbitToggle = document.getElementById('followOrbitToggle');
   const modeNormal = document.getElementById('modeNormal');
   const modeBloom = document.getElementById('modeBloom');
   const crosshair = document.getElementById('crosshair');
@@ -262,6 +360,10 @@
   let bend = 1.0;
   let spin = 0.2;
   let quality = 0.72;
+  const fovX = 90.0;
+  const fogStrength = 1.0;
+
+  let followOrbit = true;
 
   function updateReadouts() {
     const inclDeg = (incl * 180 / Math.PI).toFixed(1);
@@ -317,7 +419,49 @@
     ];
   }
 
-  function getCameraBasis() {
+  function getSkimmingOrbitBasis(t) {
+    const semiMajor = 12.0;
+    const eccentricity = 0.68;
+    const p = semiMajor * (1.0 - eccentricity * eccentricity);
+    const n = 0.105;
+    const M = n * t;
+
+    let E = M;
+    for (let i = 0; i < 7; i++) {
+      E -= (E - eccentricity * Math.sin(E) - M) / (1.0 - eccentricity * Math.cos(E));
+    }
+
+    const cosE = Math.cos(E);
+    const sinE = Math.sin(E);
+    const trueAnomaly = 2.0 * Math.atan2(Math.sqrt(1 + eccentricity) * Math.sin(E * 0.5), Math.sqrt(1 - eccentricity) * Math.cos(E * 0.5));
+    const precession = 0.22 * t;
+    const orbitalAngle = trueAnomaly + precession;
+    const radius = p / (1.0 + eccentricity * Math.cos(trueAnomaly));
+
+    const x = radius * Math.cos(orbitalAngle);
+    const z = radius * Math.sin(orbitalAngle);
+
+    const dThetaDt = n * Math.sqrt(1.0 - eccentricity * eccentricity) / Math.max(1e-3, (1.0 - eccentricity * cosE));
+    const vxOrb = -radius * Math.sin(orbitalAngle) * dThetaDt;
+    const vzOrb = radius * Math.cos(orbitalAngle) * dThetaDt;
+    const tangent = normalize([vxOrb, 0.0, vzOrb]);
+
+    const skimHeight = 0.25 * Math.sin(orbitalAngle * 0.5);
+    const camPos = [x, skimHeight, z];
+    const vy = 0.25 * 0.5 * Math.cos(orbitalAngle * 0.5) * dThetaDt;
+    const camVel = [vxOrb, vy, vzOrb];
+    const forward = tangent;
+
+    const worldUp = [0, 1, 0];
+    let right = cross(forward, worldUp);
+    if (Math.hypot(right[0], right[1], right[2]) < 1e-4) right = [1, 0, 0];
+    right = normalize(right);
+    const up = normalize(cross(right, forward));
+
+    return { camPos, right, up, forward, camVel };
+  }
+
+  function getManualCameraBasis() {
     const yaw = camYaw * Math.PI / 180;
     const pitch = camPitch * Math.PI / 180;
     const cp = Math.cos(pitch);
@@ -340,7 +484,7 @@
     right = normalize(right);
     const up = normalize(cross(right, forward));
 
-    return { camPos, right, up, forward };
+    return { camPos, right, up, forward, camVel: [0, 0, 0] };
   }
 
   incSlider.addEventListener('input', (e) => {
@@ -393,6 +537,17 @@
     updateReadouts();
   });
 
+  followOrbitToggle.addEventListener('change', (e) => {
+    followOrbit = e.target.checked;
+    yawSlider.disabled = followOrbit;
+    pitchSlider.disabled = followOrbit;
+    distSlider.disabled = followOrbit;
+    setModeBadge(followOrbit
+      ? "▸ CAMÉRA ORBITALE — géodésique excentrique (style Interstellar)"
+      : "▸ CAMÉRA MANUELLE — Schwarzschild/Kerr-lite",
+      followOrbit ? "geodesic" : "");
+  });
+
   modeNormal.addEventListener('click', () => setBloomMode(false));
   modeBloom.addEventListener('click', () => setBloomMode(true));
 
@@ -441,6 +596,8 @@
   resize();
   updateReadouts();
   setBloomMode(false);
+  followOrbitToggle.checked = true;
+  followOrbitToggle.dispatchEvent(new Event('change'));
 
   let frames = 0;
   let fpsTimer = 0;
@@ -455,7 +612,8 @@
       fpsTimer = now;
     }
 
-    const basis = getCameraBasis();
+    const orbitTime = now * speed;
+    const basis = followOrbit ? getSkimmingOrbitBasis(orbitTime) : getManualCameraBasis();
 
     gl.uniform2f(uRes, canvas.width, canvas.height);
     gl.uniform1f(uTime, now);
@@ -471,6 +629,9 @@
     gl.uniform1f(uBend, bend);
     gl.uniform1f(uSpin, spin);
     gl.uniform1f(uQuality, quality);
+    gl.uniform1f(uFovX, fovX);
+    gl.uniform3f(uCamVel, basis.camVel[0], basis.camVel[1], basis.camVel[2]);
+    gl.uniform1f(uFogStrength, fogStrength);
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
     requestAnimationFrame(render);
   }
