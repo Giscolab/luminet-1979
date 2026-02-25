@@ -167,6 +167,7 @@ canvas {
 
 /* Nouveau style pour les panneaux de contrôle */
 .controls-panel, .mode-panel {
+  flex-wrap: wrap;
   pointer-events: auto; /* Permet l'interaction avec les sliders et boutons */
 }
 
@@ -189,7 +190,7 @@ canvas {
 .control-group input[type="range"] {
   -webkit-appearance: none;
   appearance: none;
-  width: 100px;
+  width: 110px;
   height: 4px;
   background: #555;
   outline: none;

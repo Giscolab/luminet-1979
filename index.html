@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial=1.0">
   <title>Disque d’accrétion – Trou noir de Schwarzschild</title>
-  <style></style>
+  <link rel="stylesheet" href="style.css">
 </head>
 
 <body>
@@ -54,6 +54,31 @@
         <span id="rotSliderVal">1.00x</span>
         <span id="rotVal" style="display:none;"></span> <!-- Garder pour compatibilité JS si besoin -->
       </div>
+      <div class="control-group">
+        <label for="yawSlider">Cam yaw:</label>
+        <input type="range" id="yawSlider" min="-180" max="180" step="0.1" value="0.0">
+        <span id="yawSliderVal">0.0°</span>
+      </div>
+      <div class="control-group">
+        <label for="pitchSlider">Cam pitch:</label>
+        <input type="range" id="pitchSlider" min="-75" max="75" step="0.1" value="22.0">
+        <span id="pitchSliderVal">22.0°</span>
+      </div>
+      <div class="control-group">
+        <label for="distSlider">Cam dist.:</label>
+        <input type="range" id="distSlider" min="12" max="80" step="0.1" value="38.0">
+        <span id="distSliderVal">38.0</span>
+      </div>
+      <div class="control-group">
+        <label for="thickSlider">Épaisseur:</label>
+        <input type="range" id="thickSlider" min="0.05" max="3.5" step="0.01" value="0.9">
+        <span id="thickSliderVal">0.90</span>
+      </div>
+      <div class="control-group">
+        <label for="bendSlider">Lensing:</label>
+        <input type="range" id="bendSlider" min="0.2" max="2.0" step="0.01" value="1.0">
+        <span id="bendSliderVal">1.00x</span>
+      </div>
     </div>
 
     <!-- Nouveau panneau pour les modes -->
@@ -65,7 +90,7 @@
     <div id="mode-badge">▸ ANALYTIQUE — Luminet Eq.A3</div>
   </div>
 
-  <script></script>
+  <script src="script.js"></script>
 </body>
 
 </html>

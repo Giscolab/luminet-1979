@@ -21,13 +21,19 @@
   uniform float iRout;
   uniform float iSpeed;
   uniform float iBloom;
+  uniform vec3 iCamPos;
+  uniform vec3 iCamRight;
+  uniform vec3 iCamUp;
+  uniform vec3 iCamForward;
+  uniform float iDiskHalfThickness;
+  uniform float iBend;
 
   #define PI 3.141592653589793
   #define ISCO 6.0
   #define BC 5.196152
 
   float hash(vec2 p){ return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453); }
-  float r_lens_primary(float b){ return b+2.0+4.0/b; }
+  float r_lens_primary(float b){ return b+2.0+4.0/max(b,0.001); }
   float r_lens_secondary(float b){ float d=abs(b-BC); return ISCO+60.0*exp(-d*1.8); }
   float redshift(float r,float phi,float incl){ float v=1.0/sqrt(max(r-3.0,0.001)); return max((1.0+v*cos(phi)*sin(incl))/sqrt(max(1.0-3.0/r,0.001)),0.001); }
   float emissivity(float r,float phi,float t){
@@ -37,46 +43,74 @@
     float flare=pow(sin(spin*20.0+r*0.5)*0.5+0.5,4.0)*0.3;
     return base*(1.0+flare);
   }
-  float dust(vec2 pos,float t){ float r=pos.x; float phi=pos.y; float rot=t*0.15*iSpeed*pow(r,-1.2); float angle=phi+rot; vec2 q=vec2(floor(r*0.8),floor(angle*12.0/PI)); float s=hash(q); float c=hash(vec2(floor(r*2.3),floor(angle*28.0))); return 0.55+0.28*s+0.17*c; }
+  float dust(vec2 pos,float t){ float r=pos.x; float phi=pos.y; float rot=t*0.15*iSpeed*pow(max(r,0.001),-1.2); float angle=phi+rot; vec2 q=vec2(floor(r*0.8),floor(angle*12.0/PI)); float s=hash(q); float c=hash(vec2(floor(r*2.3),floor(angle*28.0))); return 0.55+0.28*s+0.17*c; }
   vec3 tempColor(float T){ T=clamp(T,0.0,1.0); vec3 c0=vec3(0.5,0.0,0.0), c1=vec3(1.0,0.2,0.0), c2=vec3(1.0,0.72,0.2), c3=vec3(1.0,0.98,0.9), c4=vec3(0.72,0.85,1.0); if(T<0.25) return mix(c0,c1,T/0.25); else if(T<0.55) return mix(c1,c2,(T-0.25)/0.30); else if(T<0.80) return mix(c2,c3,(T-0.55)/0.25); else return mix(c3,c4,(T-0.80)/0.20); }
   vec3 aces(vec3 x){ const float a=2.51,b=0.03,c=2.43,d=0.59,e=0.14; return clamp((x*(a*x+b))/(x*(c*x+d)+e),0.0,1.0); }
   vec3 bloom(vec3 col,float intensity){ float l=dot(col,vec3(0.2126,0.7152,0.0722)); if(l>0.8) col+=vec3(0.4,0.3,0.2)*(l-0.8)*2.0*intensity; return col; }
 
+  float slabHit(vec3 ro, vec3 rd, float y0, float halfThick){
+    if(abs(rd.y) < 0.0001) return -1.0;
+    float t = (y0 - ro.y) / rd.y;
+    if(t < 0.0) return -1.0;
+    vec3 p = ro + rd * t;
+    if(abs(p.y - y0) > halfThick) return -1.0;
+    return t;
+  }
+
   void main(){
-    vec2 uv=(gl_FragCoord.xy-0.5*iResolution.xy)/iResolution.y*30.0;
-    float b=length(uv);
-    float alpha=atan(uv.y,uv.x);
+    vec2 p=(gl_FragCoord.xy-0.5*iResolution.xy)/iResolution.y;
+    vec2 uv=p*30.0;
+
+    vec3 rdCam = normalize(vec3(p.x, p.y, 1.75));
+    vec3 rayDir = normalize(iCamRight * rdCam.x + iCamUp * rdCam.y + iCamForward * rdCam.z);
+
+    float bGeo = length(cross(iCamPos, rayDir));
+    float bendFactor = 1.0 + iBend * 2.0 / max(bGeo, 1.0);
+    vec3 toCenter = normalize(-iCamPos);
+    vec3 curvedRay = normalize(mix(rayDir, toCenter, clamp((bendFactor - 1.0) * 0.22, 0.0, 0.85)));
 
     float twink=sin(iTime*2.0+gl_FragCoord.x*0.01)*0.2+0.8;
     float stars=step(0.985,hash(floor(uv*18.0)))*(0.3+0.7*hash(uv*37.3))*twink;
     vec3 bg=vec3(stars*0.8,stars*0.85,stars);
 
-    if(b<BC){
-      float edge=smoothstep(BC,BC-0.3,b);
+    float horizonDist = length(cross(iCamPos, curvedRay));
+    if(horizonDist < BC){
+      float edge=smoothstep(BC,BC-0.3,horizonDist);
       bg=mix(bg*0.05,vec3(0.0),edge);
-      float glow=smoothstep(BC,BC-0.5,b)*0.2;
+      float glow=smoothstep(BC,BC-0.5,horizonDist)*0.2;
       bg+=vec3(0.5,0.3,0.1)*glow*(0.8+0.4*sin(iTime*5.0));
       fragColor=vec4(bg,1.0); return;
     }
 
     vec3 col=bg;
-    col+=vec3(0.9,0.6,0.3)*exp(-pow((b-BC)*1.5,2.0))*0.06;
+    col+=vec3(0.9,0.6,0.3)*exp(-pow((horizonDist-BC)*1.5,2.0))*0.06;
 
-    float r1=r_lens_primary(b);
-    float z1=redshift(r1,alpha,iIncl);
-    float flux1=emissivity(r1,alpha,iTime)*pow(1.0/z1,4.0);
-    flux1*=dust(vec2(r1,alpha),iTime)*200.0;
-    vec3 c1=tempColor(clamp(0.5+(1.0/z1-1.0)*1.2,0.0,1.0))*flux1;
+    float tDisk = slabHit(iCamPos, curvedRay, 0.0, iDiskHalfThickness);
+    vec3 hit = iCamPos + curvedRay * max(tDisk, 0.0);
+    float rHit = length(hit.xz);
+    float alpha = atan(hit.z, hit.x);
 
-    vec3 c2=vec3(0.0);
-    if(b<25.0){
-      float r2=r_lens_secondary(b);
-      float z2=redshift(r2,alpha+PI,iIncl);
-      float flux2=emissivity(r2,alpha+PI,iTime)*pow(1.0/z2,4.0);
-      flux2*=dust(vec2(r2,alpha+PI),iTime)*60.0;
-      c2=tempColor(clamp(0.5+(1.0/z2-1.0)*1.2,0.0,1.0))*flux2*0.3;
+    if(tDisk > 0.0){
+      float b = max(horizonDist, 0.25);
+      float r1 = max(rHit, r_lens_primary(b));
+      float z1=redshift(r1,alpha,iIncl);
+      float flux1=emissivity(r1,alpha,iTime)*pow(1.0/z1,4.0);
+      flux1*=dust(vec2(r1,alpha),iTime)*200.0;
+      vec3 c1=tempColor(clamp(0.5+(1.0/z1-1.0)*1.2,0.0,1.0))*flux1;
+
+      vec3 c2=vec3(0.0);
+      if(b<25.0){
+        float r2=r_lens_secondary(b);
+        float z2=redshift(r2,alpha+PI,iIncl);
+        float flux2=emissivity(r2,alpha+PI,iTime)*pow(1.0/z2,4.0);
+        flux2*=dust(vec2(r2,alpha+PI),iTime)*60.0;
+        c2=tempColor(clamp(0.5+(1.0/z2-1.0)*1.2,0.0,1.0))*flux2*0.3;
+      }
+
+      float thicknessFade = smoothstep(iDiskHalfThickness, 0.0, abs(hit.y));
+      col += (c1 + c2) * thicknessFade;
     }
-    col+=c1+c2;
+
     col=aces(col*1.2);
     if(iBloom>0.5) col=bloom(col,1.0);
     float vignette=1.0-0.2*length(uv/30.0);
@@ -118,6 +152,12 @@
   const uRout = gl.getUniformLocation(prog, 'iRout');
   const uSpeed = gl.getUniformLocation(prog, 'iSpeed');
   const uBloom = gl.getUniformLocation(prog, 'iBloom');
+  const uCamPos = gl.getUniformLocation(prog, 'iCamPos');
+  const uCamRight = gl.getUniformLocation(prog, 'iCamRight');
+  const uCamUp = gl.getUniformLocation(prog, 'iCamUp');
+  const uCamForward = gl.getUniformLocation(prog, 'iCamForward');
+  const uDiskHalfThickness = gl.getUniformLocation(prog, 'iDiskHalfThickness');
+  const uBend = gl.getUniformLocation(prog, 'iBend');
 
   const incVal = document.getElementById('incVal');
   const routVal = document.getElementById('routVal');
@@ -128,6 +168,16 @@
   const routSliderVal = document.getElementById('routSliderVal');
   const rotSlider = document.getElementById('rotSlider');
   const rotSliderVal = document.getElementById('rotSliderVal');
+  const yawSlider = document.getElementById('yawSlider');
+  const yawSliderVal = document.getElementById('yawSliderVal');
+  const pitchSlider = document.getElementById('pitchSlider');
+  const pitchSliderVal = document.getElementById('pitchSliderVal');
+  const distSlider = document.getElementById('distSlider');
+  const distSliderVal = document.getElementById('distSliderVal');
+  const thickSlider = document.getElementById('thickSlider');
+  const thickSliderVal = document.getElementById('thickSliderVal');
+  const bendSlider = document.getElementById('bendSlider');
+  const bendSliderVal = document.getElementById('bendSliderVal');
   const modeNormal = document.getElementById('modeNormal');
   const modeBloom = document.getElementById('modeBloom');
   const crosshair = document.getElementById('crosshair');
@@ -136,6 +186,11 @@
   let rout = 36.0;
   let speed = 1.0;
   let bloomMode = 0;
+  let camYaw = 0.0;
+  let camPitch = 22.0;
+  let camDist = 38.0;
+  let diskHalfThickness = 0.9;
+  let bend = 1.0;
 
   function updateReadouts() {
     const inclDeg = (incl * 180 / Math.PI).toFixed(1);
@@ -147,6 +202,16 @@
     routSliderVal.textContent = rout.toFixed(1);
     rotSlider.value = speed.toFixed(2);
     rotSliderVal.textContent = `${speed.toFixed(2)}x`;
+    yawSlider.value = camYaw.toFixed(1);
+    yawSliderVal.textContent = `${camYaw.toFixed(1)}°`;
+    pitchSlider.value = camPitch.toFixed(1);
+    pitchSliderVal.textContent = `${camPitch.toFixed(1)}°`;
+    distSlider.value = camDist.toFixed(1);
+    distSliderVal.textContent = camDist.toFixed(1);
+    thickSlider.value = diskHalfThickness.toFixed(2);
+    thickSliderVal.textContent = diskHalfThickness.toFixed(2);
+    bendSlider.value = bend.toFixed(2);
+    bendSliderVal.textContent = `${bend.toFixed(2)}x`;
   }
 
   function setBloomMode(enabled) {
@@ -158,6 +223,49 @@
   function setModeBadge(text, cssClass = '') {
     modeBadge.textContent = text;
     modeBadge.className = cssClass;
+  }
+
+  function clamp(v, min, max) {
+    return Math.max(min, Math.min(max, v));
+  }
+
+  function normalize(v) {
+    const len = Math.hypot(v[0], v[1], v[2]) || 1;
+    return [v[0] / len, v[1] / len, v[2] / len];
+  }
+
+  function cross(a, b) {
+    return [
+      a[1] * b[2] - a[2] * b[1],
+      a[2] * b[0] - a[0] * b[2],
+      a[0] * b[1] - a[1] * b[0],
+    ];
+  }
+
+  function getCameraBasis() {
+    const yaw = camYaw * Math.PI / 180;
+    const pitch = camPitch * Math.PI / 180;
+    const cp = Math.cos(pitch);
+    const sp = Math.sin(pitch);
+    const cy = Math.cos(yaw);
+    const sy = Math.sin(yaw);
+
+    const camPos = [
+      camDist * cp * sy,
+      camDist * sp,
+      camDist * cp * cy,
+    ];
+
+    const forward = normalize([-camPos[0], -camPos[1], -camPos[2]]);
+    const worldUp = [0, 1, 0];
+    let right = cross(forward, worldUp);
+    if (Math.hypot(right[0], right[1], right[2]) < 1e-4) {
+      right = [1, 0, 0];
+    }
+    right = normalize(right);
+    const up = normalize(cross(right, forward));
+
+    return { camPos, right, up, forward };
   }
 
   incSlider.addEventListener('input', (e) => {
@@ -175,13 +283,38 @@
     updateReadouts();
   });
 
+  yawSlider.addEventListener('input', (e) => {
+    camYaw = parseFloat(e.target.value);
+    updateReadouts();
+  });
+
+  pitchSlider.addEventListener('input', (e) => {
+    camPitch = parseFloat(e.target.value);
+    updateReadouts();
+  });
+
+  distSlider.addEventListener('input', (e) => {
+    camDist = parseFloat(e.target.value);
+    updateReadouts();
+  });
+
+  thickSlider.addEventListener('input', (e) => {
+    diskHalfThickness = parseFloat(e.target.value);
+    updateReadouts();
+  });
+
+  bendSlider.addEventListener('input', (e) => {
+    bend = parseFloat(e.target.value);
+    updateReadouts();
+  });
+
   modeNormal.addEventListener('click', () => setBloomMode(false));
   modeBloom.addEventListener('click', () => setBloomMode(true));
 
   document.addEventListener('keydown', (e) => {
     const key = e.key.toLowerCase();
     if (key === 'a') setModeBadge('▸ ANALYTIQUE — Luminet Eq.A3');
-    if (key === 'g') setModeBadge('▸ GÉODÉSIQUE — approximation', 'geodesic');
+    if (key === 'g') setModeBadge('▸ GÉODÉSIQUE — approximation orbitale 3D', 'geodesic');
     if (key === 'l') setModeBadge('▸ LUT — mode expérimental', 'lut');
   });
 
@@ -191,6 +324,8 @@
     const yNorm = clientY / window.innerHeight;
     incl = (5 + yNorm * 85) * Math.PI / 180;
     rout = 10 + xNorm * 50;
+    camYaw = -180 + xNorm * 360;
+    camPitch = clamp(70 - yNorm * 140, -75, 75);
     updateReadouts();
   }
 
@@ -234,12 +369,21 @@
       frames = 0;
       fpsTimer = now;
     }
+
+    const basis = getCameraBasis();
+
     gl.uniform2f(uRes, canvas.width, canvas.height);
     gl.uniform1f(uTime, now);
     gl.uniform1f(uIncl, incl);
     gl.uniform1f(uRout, rout);
     gl.uniform1f(uSpeed, speed);
     gl.uniform1f(uBloom, bloomMode);
+    gl.uniform3f(uCamPos, basis.camPos[0], basis.camPos[1], basis.camPos[2]);
+    gl.uniform3f(uCamRight, basis.right[0], basis.right[1], basis.right[2]);
+    gl.uniform3f(uCamUp, basis.up[0], basis.up[1], basis.up[2]);
+    gl.uniform3f(uCamForward, basis.forward[0], basis.forward[1], basis.forward[2]);
+    gl.uniform1f(uDiskHalfThickness, diskHalfThickness);
+    gl.uniform1f(uBend, bend);
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
     requestAnimationFrame(render);
   }
