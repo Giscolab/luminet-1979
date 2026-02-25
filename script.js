@@ -27,12 +27,14 @@
   uniform float iBend;
   uniform float iSpin;
   uniform float iQuality;
+  uniform float iFovX;
 
   #define PI 3.141592653589793
   #define ISCO 6.0
   #define BC 5.196152
   #define HORIZON 2.0
-  #define MAX_STEPS 220
+  #define MAX_STEPS 300
+  #define SKY_RADIUS 180.0
 
   float hash(vec2 p){ return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453); }
   float redshift(float r,float phi,float incl){ float v=1.0/sqrt(max(r-3.0,0.001)); return max((1.0+v*cos(phi)*sin(incl))/sqrt(max(1.0-3.0/r,0.001)),0.001); }
@@ -90,20 +92,48 @@
     dir = normalize(dir + h * (k1v + 2.0*k2v + 2.0*k3v + k4v) / 6.0);
   }
 
-  bool traceDisk(vec3 ro, vec3 rd, out vec3 hit, out vec3 hitDir, out float bMin){
+  vec3 skyColor(vec3 dir){
+    vec3 d = normalize(dir);
+    float phi = atan(d.z, d.x);
+    float theta = acos(clamp(d.y, -1.0, 1.0));
+
+    vec2 uv = vec2(phi / (2.0 * PI) + 0.5, theta / PI);
+    vec2 g = floor(uv * vec2(180.0, 90.0));
+
+    float cluster = hash(g);
+    float stars = step(0.994, cluster) * (0.25 + 0.75 * hash(g * 0.73 + 9.1));
+
+    float milkyBand = exp(-pow((uv.y - 0.5) * 7.0, 2.0));
+    float dustBand = hash(g * vec2(1.3, 2.1) + 17.0) * milkyBand;
+
+    vec3 nebula = mix(vec3(0.03, 0.035, 0.055), vec3(0.08, 0.06, 0.04), dustBand * 0.8);
+    vec3 starTint = mix(vec3(0.85, 0.9, 1.0), vec3(1.0, 0.88, 0.72), hash(g + 3.7));
+
+    return nebula + starTint * stars * (0.7 + 0.3 * milkyBand);
+  }
+
+  bool traceScene(vec3 ro, vec3 rd, out vec3 hit, out vec3 hitDir, out vec3 skyDir, out float bMin, out bool swallowed){
     vec3 pos = ro;
     vec3 dir = rd;
     float L2 = dot(cross(ro, rd), cross(ro, rd));
     float prevY = pos.y;
     bMin = 1e9;
+    swallowed = false;
+    skyDir = rd;
 
     for (int i = 0; i < MAX_STEPS; i++) {
       if (float(i) > mix(90.0, float(MAX_STEPS), iQuality)) break;
 
       float r = length(pos);
       bMin = min(bMin, length(cross(pos, dir)));
-      if (r < HORIZON) return false;
-      if (r > 130.0) return false;
+      if (r < HORIZON) {
+        swallowed = true;
+        return false;
+      }
+      if (r > SKY_RADIUS) {
+        skyDir = normalize(pos);
+        return false;
+      }
 
       float stepFar = mix(0.45, 1.4, clamp((r - 8.0) / 55.0, 0.0, 1.0));
       float h = stepFar / mix(1.5, 0.7, iQuality);
@@ -124,24 +154,32 @@
       }
       prevY = pos.y;
     }
+    skyDir = normalize(pos);
     return false;
   }
 
   void main(){
     vec2 p=(gl_FragCoord.xy-0.5*iResolution.xy)/iResolution.y;
-    vec2 uv=p*30.0;
-
-    vec3 rdCam = normalize(vec3(p.x, p.y, 1.75));
+    float focal = 0.5 * (iResolution.x / iResolution.y) / tan(radians(iFovX) * 0.5);
+    vec3 rdCam = normalize(vec3(p.x, p.y, focal));
     vec3 rayDir = normalize(iCamRight * rdCam.x + iCamUp * rdCam.y + iCamForward * rdCam.z);
-
-    float twink=sin(iTime*2.0+gl_FragCoord.x*0.01)*0.2+0.8;
-    float stars=step(0.985,hash(floor(uv*18.0)))*(0.3+0.7*hash(uv*37.3))*twink;
-    vec3 bg=vec3(stars*0.8,stars*0.85,stars);
 
     vec3 hit = vec3(0.0);
     vec3 hitDir = vec3(0.0);
+    vec3 skyDir = vec3(0.0);
     float bMin;
-    bool seenDisk = traceDisk(iCamPos, rayDir, hit, hitDir, bMin);
+    bool swallowed = false;
+    bool seenDisk = traceScene(iCamPos, rayDir, hit, hitDir, skyDir, bMin, swallowed);
+
+    vec3 bg = skyColor(skyDir);
+
+    if (swallowed) {
+      float photonRing = exp(-pow((bMin - BC) * 3.5, 2.0));
+      bg = vec3(0.0);
+      bg += vec3(0.95, 0.66, 0.35) * photonRing * 0.45;
+      fragColor = vec4(pow(bg, vec3(1.0 / 2.2)), 1.0);
+      return;
+    }
 
     if (!seenDisk && bMin < BC) {
       float edge=smoothstep(BC,BC-0.5,bMin);
@@ -176,7 +214,7 @@
 
     col=aces(col*1.2);
     if(iBloom>0.5) col=bloom(col,1.0);
-    float vignette=1.0-0.2*length(uv/30.0);
+    float vignette=1.0-0.2*length(p*1.1);
     col*=vignette;
     col=pow(col,vec3(1.0/2.2));
     fragColor=vec4(col,1.0);
@@ -223,6 +261,7 @@
   const uBend = gl.getUniformLocation(prog, 'iBend');
   const uSpin = gl.getUniformLocation(prog, 'iSpin');
   const uQuality = gl.getUniformLocation(prog, 'iQuality');
+  const uFovX = gl.getUniformLocation(prog, 'iFovX');
 
   const incVal = document.getElementById('incVal');
   const routVal = document.getElementById('routVal');
@@ -247,6 +286,7 @@
   const spinSliderVal = document.getElementById('spinSliderVal');
   const qualitySlider = document.getElementById('qualitySlider');
   const qualitySliderVal = document.getElementById('qualitySliderVal');
+  const followOrbitToggle = document.getElementById('followOrbitToggle');
   const modeNormal = document.getElementById('modeNormal');
   const modeBloom = document.getElementById('modeBloom');
   const crosshair = document.getElementById('crosshair');
@@ -262,6 +302,9 @@
   let bend = 1.0;
   let spin = 0.2;
   let quality = 0.72;
+  const fovX = 90.0;
+
+  let followOrbit = true;
 
   function updateReadouts() {
     const inclDeg = (incl * 180 / Math.PI).toFixed(1);
@@ -317,7 +360,47 @@
     ];
   }
 
-  function getCameraBasis() {
+  function getSkimmingOrbitBasis(t) {
+    const semiMajor = 12.0;
+    const eccentricity = 0.68;
+    const p = semiMajor * (1.0 - eccentricity * eccentricity);
+    const n = 0.105;
+    const M = n * t;
+
+    let E = M;
+    for (let i = 0; i < 7; i++) {
+      E -= (E - eccentricity * Math.sin(E) - M) / (1.0 - eccentricity * Math.cos(E));
+    }
+
+    const cosE = Math.cos(E);
+    const sinE = Math.sin(E);
+    const trueAnomaly = 2.0 * Math.atan2(Math.sqrt(1 + eccentricity) * Math.sin(E * 0.5), Math.sqrt(1 - eccentricity) * Math.cos(E * 0.5));
+    const precession = 0.22 * t;
+    const orbitalAngle = trueAnomaly + precession;
+    const radius = p / (1.0 + eccentricity * Math.cos(trueAnomaly));
+
+    const x = radius * Math.cos(orbitalAngle);
+    const z = radius * Math.sin(orbitalAngle);
+
+    const dThetaDt = n * Math.sqrt(1.0 - eccentricity * eccentricity) / Math.max(1e-3, (1.0 - eccentricity * cosE));
+    const vxOrb = -radius * Math.sin(orbitalAngle) * dThetaDt;
+    const vzOrb = radius * Math.cos(orbitalAngle) * dThetaDt;
+    const tangent = normalize([vxOrb, 0.0, vzOrb]);
+
+    const skimHeight = 0.25 * Math.sin(orbitalAngle * 0.5);
+    const camPos = [x, skimHeight, z];
+    const forward = tangent;
+
+    const worldUp = [0, 1, 0];
+    let right = cross(forward, worldUp);
+    if (Math.hypot(right[0], right[1], right[2]) < 1e-4) right = [1, 0, 0];
+    right = normalize(right);
+    const up = normalize(cross(right, forward));
+
+    return { camPos, right, up, forward };
+  }
+
+  function getManualCameraBasis() {
     const yaw = camYaw * Math.PI / 180;
     const pitch = camPitch * Math.PI / 180;
     const cp = Math.cos(pitch);
@@ -393,6 +476,17 @@
     updateReadouts();
   });
 
+  followOrbitToggle.addEventListener('change', (e) => {
+    followOrbit = e.target.checked;
+    yawSlider.disabled = followOrbit;
+    pitchSlider.disabled = followOrbit;
+    distSlider.disabled = followOrbit;
+    setModeBadge(followOrbit
+      ? "▸ CAMÉRA ORBITALE — géodésique excentrique (style Interstellar)"
+      : "▸ CAMÉRA MANUELLE — Schwarzschild/Kerr-lite",
+      followOrbit ? "geodesic" : "");
+  });
+
   modeNormal.addEventListener('click', () => setBloomMode(false));
   modeBloom.addEventListener('click', () => setBloomMode(true));
 
@@ -441,6 +535,8 @@
   resize();
   updateReadouts();
   setBloomMode(false);
+  followOrbitToggle.checked = true;
+  followOrbitToggle.dispatchEvent(new Event('change'));
 
   let frames = 0;
   let fpsTimer = 0;
@@ -455,7 +551,8 @@
       fpsTimer = now;
     }
 
-    const basis = getCameraBasis();
+    const orbitTime = now * speed;
+    const basis = followOrbit ? getSkimmingOrbitBasis(orbitTime) : getManualCameraBasis();
 
     gl.uniform2f(uRes, canvas.width, canvas.height);
     gl.uniform1f(uTime, now);
@@ -471,6 +568,7 @@
     gl.uniform1f(uBend, bend);
     gl.uniform1f(uSpin, spin);
     gl.uniform1f(uQuality, quality);
+    gl.uniform1f(uFovX, fovX);
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
     requestAnimationFrame(render);
   }
