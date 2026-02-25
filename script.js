@@ -33,6 +33,10 @@
   uniform float iDiskSense;
   uniform float iEmissionMode;
   uniform float iMaxDiskCrossings;
+  uniform float iLodAuto;
+  uniform float iLodMin;
+  uniform float iLodMax;
+  uniform float iCamSpeedFiltered;
 
   #define PI 3.141592653589793
   #define BC 5.196152
@@ -181,13 +185,18 @@
     dir = normalize(dir + h * (k1v + 2.0*k2v + 2.0*k3v + k4v) / 6.0);
   }
 
-  vec3 skyColor(vec3 dir){
+  vec3 skyColor(vec3 dir, float starLod, float jitterAmp){
     vec3 d = normalize(dir);
     float phi = atan(d.z, d.x);
     float theta = acos(clamp(d.y, -1.0, 1.0));
 
     vec2 uv = vec2(phi / (2.0 * PI) + 0.5, theta / PI);
-    vec2 g = floor(uv * vec2(180.0, 90.0));
+    vec2 jitter = vec2(
+      hash(gl_FragCoord.xy + vec2(iTime * 61.7, iTime * 23.3)) - 0.5,
+      hash(gl_FragCoord.yx + vec2(iTime * 17.1, iTime * 43.9)) - 0.5
+    ) * jitterAmp;
+    vec2 lodGrid = mix(vec2(120.0, 60.0), vec2(220.0, 110.0), starLod);
+    vec2 g = floor((uv + jitter / lodGrid) * lodGrid);
 
     float cluster = hash(g);
     float stars = step(0.994, cluster) * (0.25 + 0.75 * hash(g * 0.73 + 9.1));
@@ -201,14 +210,14 @@
     return nebula + starTint * stars * (0.7 + 0.3 * milkyBand);
   }
 
-  bool traceScene(vec3 ro, vec3 rd, float rISCO, out vec3 skyDir, out float bMin, out bool swallowed, out float fogOptical, out float fogGlow, out vec3 diskAccum){
+  bool traceScene(vec3 ro, vec3 rd, float rISCO, float traceQuality, out vec3 skyDir, out float bMin, out bool swallowed, out float fogOptical, out float fogGlow, out vec3 diskAccum){
     vec3 pos = ro;
     vec3 dir = rd;
     float L2 = dot(cross(ro, rd), cross(ro, rd));
     float prevY = pos.y;
     float diskTransmittance = 1.0;
     int crossings = 0;
-    int crossingBudget = int(clamp(floor(mix(1.0, iMaxDiskCrossings, iQuality) + 0.5), 1.0, 8.0));
+    int crossingBudget = int(clamp(floor(mix(1.0, iMaxDiskCrossings, traceQuality) + 0.5), 1.0, 8.0));
     bMin = 1e9;
     swallowed = false;
     skyDir = rd;
@@ -217,7 +226,7 @@
     diskAccum = vec3(0.0);
 
     for (int i = 0; i < MAX_STEPS; i++) {
-      if (float(i) > mix(90.0, float(MAX_STEPS), iQuality)) break;
+      if (float(i) > mix(80.0, float(MAX_STEPS), traceQuality)) break;
 
       float r = length(pos);
       bMin = min(bMin, length(cross(pos, dir)));
@@ -233,7 +242,7 @@
       }
 
       float stepFar = mix(0.45, 1.4, clamp((r - 8.0) / 55.0, 0.0, 1.0));
-      float h = stepFar / mix(1.5, 0.7, iQuality);
+      float h = stepFar / mix(1.65, 0.68, traceQuality);
       h *= mix(1.0, 0.72, clamp(10.0 / max(r, 0.1), 0.0, 1.0));
 
       float diskBand = exp(-abs(pos.y) / max(iDiskHalfThickness * 1.8, 0.05));
@@ -303,15 +312,23 @@
     bool prograde = iDiskSense > 0.5;
     float rISCO = iscoRadius(iSpin, prograde);
 
+    float speed = length(iCamVel);
+    float lodSpeed = mix(speed, iCamSpeedFiltered, 0.82);
+    float lodNorm = smoothstep(0.04, 1.10, lodSpeed);
+    float autoQuality = mix(iLodMax, iLodMin, lodNorm);
+    float traceQuality = mix(iQuality, autoQuality, iLodAuto);
+    float starLod = clamp(traceQuality * 0.95 + 0.05, 0.0, 1.0);
+    float jitterAmp = mix(0.95, 0.18, traceQuality);
+
     vec3 skyDir = vec3(0.0);
     vec3 diskAccum = vec3(0.0);
     float bMin;
     float fogOptical = 0.0;
     float fogGlow = 0.0;
     bool swallowed = false;
-    bool seenDisk = traceScene(iCamPos, rayDir, rISCO, skyDir, bMin, swallowed, fogOptical, fogGlow, diskAccum);
+    bool seenDisk = traceScene(iCamPos, rayDir, rISCO, traceQuality, skyDir, bMin, swallowed, fogOptical, fogGlow, diskAccum);
 
-    vec3 bg = skyColor(skyDir);
+    vec3 bg = skyColor(skyDir, starLod, jitterAmp);
     float skyD = dopplerFactor(skyDir, iCamVel);
     bg = applyDopplerTint(bg, skyD);
 
@@ -396,6 +413,10 @@
   const uDiskSense = gl.getUniformLocation(prog, 'iDiskSense');
   const uEmissionMode = gl.getUniformLocation(prog, 'iEmissionMode');
   const uMaxDiskCrossings = gl.getUniformLocation(prog, 'iMaxDiskCrossings');
+  const uLodAuto = gl.getUniformLocation(prog, 'iLodAuto');
+  const uLodMin = gl.getUniformLocation(prog, 'iLodMin');
+  const uLodMax = gl.getUniformLocation(prog, 'iLodMax');
+  const uCamSpeedFiltered = gl.getUniformLocation(prog, 'iCamSpeedFiltered');
 
   const incVal = document.getElementById('incVal');
   const routVal = document.getElementById('routVal');
@@ -422,6 +443,12 @@
   const progradeVal = document.getElementById('progradeVal');
   const qualitySlider = document.getElementById('qualitySlider');
   const qualitySliderVal = document.getElementById('qualitySliderVal');
+  const autoLodToggle = document.getElementById('autoLodToggle');
+  const autoLodVal = document.getElementById('autoLodVal');
+  const lodMinSlider = document.getElementById('lodMinSlider');
+  const lodMinVal = document.getElementById('lodMinVal');
+  const lodMaxSlider = document.getElementById('lodMaxSlider');
+  const lodMaxVal = document.getElementById('lodMaxVal');
   const maxDiskCrossingsSlider = document.getElementById('maxDiskCrossingsSlider');
   const maxDiskCrossingsVal = document.getElementById('maxDiskCrossingsVal');
   const followOrbitToggle = document.getElementById('followOrbitToggle');
@@ -443,6 +470,10 @@
   let spin = 0.2;
   let diskPrograde = true;
   let quality = 0.72;
+  let autoLodEnabled = true;
+  let lodMin = 0.40;
+  let lodMax = 0.90;
+  let filteredCamSpeed = 0.0;
   let maxDiskCrossings = 4;
   let ntEmissionMode = true;
   const fovX = 90.0;
@@ -476,6 +507,12 @@
     progradeVal.textContent = diskPrograde ? "prograde" : "retrograde";
     qualitySlider.value = quality.toFixed(2);
     qualitySliderVal.textContent = quality.toFixed(2);
+    autoLodToggle.checked = autoLodEnabled;
+    autoLodVal.textContent = autoLodEnabled ? 'activé' : 'désactivé';
+    lodMinSlider.value = lodMin.toFixed(2);
+    lodMinVal.textContent = lodMin.toFixed(2);
+    lodMaxSlider.value = lodMax.toFixed(2);
+    lodMaxVal.textContent = lodMax.toFixed(2);
     maxDiskCrossingsSlider.value = String(maxDiskCrossings);
     maxDiskCrossingsVal.textContent = String(maxDiskCrossings);
     emissionModeToggle.checked = ntEmissionMode;
@@ -633,6 +670,23 @@
     updateReadouts();
   });
 
+  autoLodToggle.addEventListener('change', (e) => {
+    autoLodEnabled = e.target.checked;
+    updateReadouts();
+  });
+
+  lodMinSlider.addEventListener('input', (e) => {
+    lodMin = parseFloat(e.target.value);
+    if (lodMin > lodMax - 0.01) lodMax = clamp(lodMin + 0.01, 0.25, 1.0);
+    updateReadouts();
+  });
+
+  lodMaxSlider.addEventListener('input', (e) => {
+    lodMax = parseFloat(e.target.value);
+    if (lodMax < lodMin + 0.01) lodMin = clamp(lodMax - 0.01, 0.25, 1.0);
+    updateReadouts();
+  });
+
   maxDiskCrossingsSlider.addEventListener('input', (e) => {
     maxDiskCrossings = parseInt(e.target.value, 10);
     updateReadouts();
@@ -721,6 +775,22 @@
     const orbitTime = now * speed;
     const basis = followOrbit ? getSkimmingOrbitBasis(orbitTime) : getManualCameraBasis();
 
+    const rawCamSpeed = Math.hypot(basis.camVel[0], basis.camVel[1], basis.camVel[2]);
+    const schmittBand = 0.02;
+    let targetSpeed = filteredCamSpeed;
+    if (rawCamSpeed > filteredCamSpeed + schmittBand) {
+      targetSpeed = rawCamSpeed - schmittBand;
+    } else if (rawCamSpeed < filteredCamSpeed - schmittBand) {
+      targetSpeed = rawCamSpeed + schmittBand;
+    }
+    const dt = Math.min(Math.max(now - (render.lastNow || now), 0.0), 0.2);
+    const riseTau = 0.22;
+    const fallTau = 0.38;
+    const tau = targetSpeed >= filteredCamSpeed ? riseTau : fallTau;
+    const alpha = 1.0 - Math.exp(-dt / Math.max(tau, 1e-4));
+    filteredCamSpeed += (targetSpeed - filteredCamSpeed) * alpha;
+    render.lastNow = now;
+
     gl.uniform2f(uRes, canvas.width, canvas.height);
     gl.uniform1f(uTime, now);
     gl.uniform1f(uIncl, incl);
@@ -741,6 +811,10 @@
     gl.uniform1f(uDiskSense, diskPrograde ? 1.0 : 0.0);
     gl.uniform1f(uEmissionMode, ntEmissionMode ? 1.0 : 0.0);
     gl.uniform1f(uMaxDiskCrossings, maxDiskCrossings);
+    gl.uniform1f(uLodAuto, autoLodEnabled ? 1.0 : 0.0);
+    gl.uniform1f(uLodMin, lodMin);
+    gl.uniform1f(uLodMax, lodMax);
+    gl.uniform1f(uCamSpeedFiltered, filteredCamSpeed);
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
     requestAnimationFrame(render);
   }
