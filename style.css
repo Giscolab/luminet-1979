@@ -29,8 +29,8 @@ body {
 
 body {
   background:
-    radial-gradient(120vw 90vh at 50% 115%, rgba(65, 89, 141, 0.2), transparent 65%),
-    radial-gradient(90vw 70vh at 50% -20%, rgba(36, 49, 78, 0.3), transparent 62%),
+    radial-gradient(120vw 90vh at 50% 115%, rgba(65, 89, 141, 0.08), transparent 65%),
+    radial-gradient(90vw 70vh at 50% -20%, rgba(36, 49, 78, 0.1), transparent 62%),
     var(--bg);
   font-family: "Inter", "Segoe UI", "Roboto", system-ui, sans-serif;
   overflow: hidden;

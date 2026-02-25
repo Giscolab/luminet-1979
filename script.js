@@ -359,7 +359,7 @@
       float edge=smoothstep(BC,BC-0.5,bMin);
       bg=mix(bg*0.03,vec3(0.0),edge);
       float glow=smoothstep(BC,BC-0.8,bMin)*0.3;
-      bg+=vec3(0.55,0.32,0.1)*glow*(0.8+0.4*sin(iTime*5.0));
+      bg+=vec3(0.55,0.32,0.1)*glow*0.8;
       bg = tonemapGlobal(bg);
       fragColor=vec4(pow(bg,vec3(1.0/2.2)),1.0); return;
     }
