@@ -32,6 +32,7 @@
   uniform float iFogStrength;
   uniform float iDiskSense;
   uniform float iEmissionMode;
+  uniform float iMaxDiskCrossings;
 
   #define PI 3.141592653589793
   #define BC 5.196152
@@ -200,16 +201,20 @@
     return nebula + starTint * stars * (0.7 + 0.3 * milkyBand);
   }
 
-  bool traceScene(vec3 ro, vec3 rd, float rISCO, out vec3 hit, out vec3 hitDir, out vec3 skyDir, out float bMin, out bool swallowed, out float fogOptical, out float fogGlow){
+  bool traceScene(vec3 ro, vec3 rd, float rISCO, out vec3 skyDir, out float bMin, out bool swallowed, out float fogOptical, out float fogGlow, out vec3 diskAccum){
     vec3 pos = ro;
     vec3 dir = rd;
     float L2 = dot(cross(ro, rd), cross(ro, rd));
     float prevY = pos.y;
+    float diskTransmittance = 1.0;
+    int crossings = 0;
+    int crossingBudget = int(clamp(floor(mix(1.0, iMaxDiskCrossings, iQuality) + 0.5), 1.0, 8.0));
     bMin = 1e9;
     swallowed = false;
     skyDir = rd;
     fogOptical = 0.0;
     fogGlow = 0.0;
+    diskAccum = vec3(0.0);
 
     for (int i = 0; i < MAX_STEPS; i++) {
       if (float(i) > mix(90.0, float(MAX_STEPS), iQuality)) break;
@@ -245,16 +250,47 @@
       if (sign(prevY) != sign(pos.y)) {
         float t = prevY / (prevY - pos.y);
         vec3 crossPos = mix(prevPos, pos, t);
-        if (abs(crossPos.y) <= iDiskHalfThickness && length(crossPos.xz) > rISCO && length(crossPos.xz) < iRout) {
-          hit = crossPos;
-          hitDir = normalize(mix(prevDir, dir, t));
-          return true;
+        float rCross = length(crossPos.xz);
+        if (abs(crossPos.y) <= iDiskHalfThickness && rCross > rISCO && rCross < iRout) {
+          vec3 crossDir = normalize(mix(prevDir, dir, t));
+          float alpha = atan(crossPos.z, crossPos.x);
+
+          float z1 = redshift(rCross, alpha, iIncl);
+          float F1 = emissivity(rCross, alpha, iTime, rISCO);
+          float flux1 = F1 * pow(1.0 / z1, 4.0);
+          float dust1 = dust(vec2(rCross, alpha), iTime) * mix(170.0, 220.0, iEmissionMode);
+          vec3 c1 = diskColor(flux1, z1, dust1, rISCO);
+
+          float rGhost = max(rISCO, rCross + 10.0 * exp(-abs(bMin - BC) * 1.7));
+          float z2 = redshift(rGhost, alpha + PI, iIncl);
+          float F2 = emissivity(rGhost, alpha + PI, iTime, rISCO);
+          float flux2 = F2 * pow(1.0 / z2, 4.0);
+          float dust2 = dust(vec2(rGhost, alpha + PI), iTime) * mix(40.0, 55.0, iEmissionMode);
+          vec3 c2 = diskColor(flux2, z2, dust2, rISCO) * 0.28;
+
+          float thicknessFade = smoothstep(iDiskHalfThickness, 0.0, abs(crossPos.y));
+          float dopplerAniso = 0.75 + 0.25 * clamp(dot(normalize(vec3(-crossPos.z,0.0,crossPos.x)), -crossDir), -1.0, 1.0);
+          vec3 crossingCol = (c1 + c2) * thicknessFade * dopplerAniso;
+          crossingCol = applyDopplerTint(crossingCol, dopplerFactor(crossDir, iCamVel));
+
+          float radialNorm = clamp((rCross - rISCO) / max(iRout - rISCO, 1e-3), 0.0, 1.0);
+          float localTau = mix(1.2, 0.18, radialNorm) * clamp(0.35 / max(abs(crossDir.y), 0.12), 0.7, 2.9);
+          localTau *= mix(0.85, 1.25, iEmissionMode);
+          float absorbWeight = 1.0 - exp(-localTau);
+          diskAccum += crossingCol * (diskTransmittance * absorbWeight);
+          diskTransmittance *= exp(-localTau);
+
+          crossings++;
+          if (crossings >= crossingBudget || diskTransmittance < 0.03) {
+            skyDir = normalize(pos);
+            return crossings > 0;
+          }
         }
       }
       prevY = pos.y;
     }
     skyDir = normalize(pos);
-    return false;
+    return crossings > 0;
   }
 
   void main(){
@@ -267,14 +303,13 @@
     bool prograde = iDiskSense > 0.5;
     float rISCO = iscoRadius(iSpin, prograde);
 
-    vec3 hit = vec3(0.0);
-    vec3 hitDir = vec3(0.0);
     vec3 skyDir = vec3(0.0);
+    vec3 diskAccum = vec3(0.0);
     float bMin;
     float fogOptical = 0.0;
     float fogGlow = 0.0;
     bool swallowed = false;
-    bool seenDisk = traceScene(iCamPos, rayDir, rISCO, hit, hitDir, skyDir, bMin, swallowed, fogOptical, fogGlow);
+    bool seenDisk = traceScene(iCamPos, rayDir, rISCO, skyDir, bMin, swallowed, fogOptical, fogGlow, diskAccum);
 
     vec3 bg = skyColor(skyDir);
     float skyD = dopplerFactor(skyDir, iCamVel);
@@ -304,29 +339,7 @@
     col *= fogTransmittance;
     col += vec3(1.05, 0.72, 0.45) * fogGlow * 0.11;
 
-    if(seenDisk){
-      float rHit = length(hit.xz);
-      float alpha = atan(hit.z, hit.x);
-
-      float z1=redshift(rHit,alpha,iIncl);
-      float F1=emissivity(rHit,alpha,iTime,rISCO);
-      float flux1=F1*pow(1.0/z1,4.0);
-      float dust1=dust(vec2(rHit,alpha),iTime)*mix(170.0, 220.0, iEmissionMode);
-      vec3 c1=diskColor(flux1, z1, dust1, rISCO);
-
-      float rGhost = max(rISCO, rHit + 10.0 * exp(-abs(bMin - BC) * 1.7));
-      float z2=redshift(rGhost,alpha+PI,iIncl);
-      float F2=emissivity(rGhost,alpha+PI,iTime,rISCO);
-      float flux2=F2*pow(1.0/z2,4.0);
-      float dust2=dust(vec2(rGhost,alpha+PI),iTime)*mix(40.0, 55.0, iEmissionMode);
-      vec3 c2=diskColor(flux2, z2, dust2, rISCO)*0.28;
-
-      float thicknessFade = smoothstep(iDiskHalfThickness, 0.0, abs(hit.y));
-      float dopplerAniso = 0.75 + 0.25 * clamp(dot(normalize(vec3(-hit.z,0.0,hit.x)), -hitDir), -1.0, 1.0);
-      vec3 diskCol = (c1 + c2) * thicknessFade * dopplerAniso;
-      diskCol = applyDopplerTint(diskCol, dopplerFactor(hitDir, iCamVel));
-      col += diskCol;
-    }
+    if(seenDisk) col += diskAccum;
 
     col=aces(col*1.2);
     if(iBloom>0.5) col=bloom(col,1.0);
@@ -382,6 +395,7 @@
   const uFogStrength = gl.getUniformLocation(prog, 'iFogStrength');
   const uDiskSense = gl.getUniformLocation(prog, 'iDiskSense');
   const uEmissionMode = gl.getUniformLocation(prog, 'iEmissionMode');
+  const uMaxDiskCrossings = gl.getUniformLocation(prog, 'iMaxDiskCrossings');
 
   const incVal = document.getElementById('incVal');
   const routVal = document.getElementById('routVal');
@@ -408,6 +422,8 @@
   const progradeVal = document.getElementById('progradeVal');
   const qualitySlider = document.getElementById('qualitySlider');
   const qualitySliderVal = document.getElementById('qualitySliderVal');
+  const maxDiskCrossingsSlider = document.getElementById('maxDiskCrossingsSlider');
+  const maxDiskCrossingsVal = document.getElementById('maxDiskCrossingsVal');
   const followOrbitToggle = document.getElementById('followOrbitToggle');
   const emissionModeToggle = document.getElementById('emissionModeToggle');
   const emissionModeVal = document.getElementById('emissionModeVal');
@@ -427,6 +443,7 @@
   let spin = 0.2;
   let diskPrograde = true;
   let quality = 0.72;
+  let maxDiskCrossings = 4;
   let ntEmissionMode = true;
   const fovX = 90.0;
   const fogStrength = 1.0;
@@ -459,6 +476,8 @@
     progradeVal.textContent = diskPrograde ? "prograde" : "retrograde";
     qualitySlider.value = quality.toFixed(2);
     qualitySliderVal.textContent = quality.toFixed(2);
+    maxDiskCrossingsSlider.value = String(maxDiskCrossings);
+    maxDiskCrossingsVal.textContent = String(maxDiskCrossings);
     emissionModeToggle.checked = ntEmissionMode;
     emissionModeVal.textContent = ntEmissionMode ? "NT" : "stylized/legacy";
   }
@@ -614,6 +633,11 @@
     updateReadouts();
   });
 
+  maxDiskCrossingsSlider.addEventListener('input', (e) => {
+    maxDiskCrossings = parseInt(e.target.value, 10);
+    updateReadouts();
+  });
+
   followOrbitToggle.addEventListener('change', (e) => {
     followOrbit = e.target.checked;
     yawSlider.disabled = followOrbit;
@@ -716,6 +740,7 @@
     gl.uniform1f(uFogStrength, fogStrength);
     gl.uniform1f(uDiskSense, diskPrograde ? 1.0 : 0.0);
     gl.uniform1f(uEmissionMode, ntEmissionMode ? 1.0 : 0.0);
+    gl.uniform1f(uMaxDiskCrossings, maxDiskCrossings);
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
     requestAnimationFrame(render);
   }
