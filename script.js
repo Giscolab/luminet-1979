@@ -30,19 +30,30 @@
   uniform float iFovX;
   uniform vec3 iCamVel;
   uniform float iFogStrength;
+  uniform float iDiskSense;
 
   #define PI 3.141592653589793
-  #define ISCO 6.0
   #define BC 5.196152
-  #define HORIZON 2.0
   #define MAX_STEPS 300
   #define SKY_RADIUS 180.0
 
   float hash(vec2 p){ return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453); }
+  float iscoRadius(float a, bool prograde){
+    float aa = clamp(a, -0.999, 0.999);
+    float z1 = 1.0 + pow(1.0 - aa * aa, 1.0 / 3.0) * (pow(1.0 + aa, 1.0 / 3.0) + pow(1.0 - aa, 1.0 / 3.0));
+    float z2 = sqrt(max(3.0 * aa * aa + z1 * z1, 1e-5));
+    float sgn = prograde ? 1.0 : -1.0;
+    float inside = max((3.0 - z1) * (3.0 + z1 + 2.0 * z2), 0.0);
+    return 3.0 + z2 - sgn * sqrt(inside);
+  }
+  float horizonRadius(float a){
+    float aa = clamp(a, -0.999, 0.999);
+    return 1.0 + sqrt(max(1.0 - aa * aa, 0.0));
+  }
   float redshift(float r,float phi,float incl){ float v=1.0/sqrt(max(r-3.0,0.001)); return max((1.0+v*cos(phi)*sin(incl))/sqrt(max(1.0-3.0/r,0.001)),0.001); }
-  float emissivity(float r,float phi,float t){
-    if(r<ISCO || r>iRout) return 0.0;
-    float base=(1.0-sqrt(ISCO/r))*pow(r,-3.0);
+  float emissivity(float r,float phi,float t,float rISCO){
+    if(r<rISCO || r>iRout) return 0.0;
+    float base=(1.0-sqrt(rISCO/r))*pow(r,-3.0);
     float spin=fract(phi/(2.0*PI)+t*0.1*iSpeed);
     float flare=pow(sin(spin*20.0+r*0.5)*0.5+0.5,4.0)*0.3;
     return base*(1.0+flare);
@@ -146,7 +157,7 @@
     return nebula + starTint * stars * (0.7 + 0.3 * milkyBand);
   }
 
-  bool traceScene(vec3 ro, vec3 rd, out vec3 hit, out vec3 hitDir, out vec3 skyDir, out float bMin, out bool swallowed, out float fogOptical, out float fogGlow){
+  bool traceScene(vec3 ro, vec3 rd, float rISCO, out vec3 hit, out vec3 hitDir, out vec3 skyDir, out float bMin, out bool swallowed, out float fogOptical, out float fogGlow){
     vec3 pos = ro;
     vec3 dir = rd;
     float L2 = dot(cross(ro, rd), cross(ro, rd));
@@ -162,8 +173,9 @@
 
       float r = length(pos);
       bMin = min(bMin, length(cross(pos, dir)));
-      float asymH = HORIZON * (1.0 - 0.12 * iSpin * clamp(pos.x / max(r, 1e-3), -1.0, 1.0));
-      if (r < clamp(asymH, 1.55, 2.45)) {
+      float rH = horizonRadius(iSpin);
+      float asymH = rH * (1.0 - 0.12 * iSpin * clamp(pos.x / max(r, 1e-3), -1.0, 1.0));
+      if (r < clamp(asymH, max(0.8 * rH, 1.05), 2.45)) {
         swallowed = true;
         return false;
       }
@@ -177,8 +189,8 @@
       h *= mix(1.0, 0.72, clamp(10.0 / max(r, 0.1), 0.0, 1.0));
 
       float diskBand = exp(-abs(pos.y) / max(iDiskHalfThickness * 1.8, 0.05));
-      float radial = 1.0 - smoothstep(ISCO * 0.9, iRout * 1.4, length(pos.xz));
-      float hotInner = exp(-pow((length(pos.xz) - (ISCO + 1.0)) * 0.45, 2.0));
+      float radial = 1.0 - smoothstep(rISCO * 0.9, iRout * 1.4, length(pos.xz));
+      float hotInner = exp(-pow((length(pos.xz) - (rISCO + 1.0)) * 0.45, 2.0));
       float fogDensity = diskBand * radial;
       fogOptical += fogDensity * h * 0.13 * iFogStrength;
       fogGlow += fogDensity * (0.16 + 0.95 * hotInner) * h * iFogStrength;
@@ -190,7 +202,7 @@
       if (sign(prevY) != sign(pos.y)) {
         float t = prevY / (prevY - pos.y);
         vec3 crossPos = mix(prevPos, pos, t);
-        if (abs(crossPos.y) <= iDiskHalfThickness && length(crossPos.xz) > ISCO && length(crossPos.xz) < iRout) {
+        if (abs(crossPos.y) <= iDiskHalfThickness && length(crossPos.xz) > rISCO && length(crossPos.xz) < iRout) {
           hit = crossPos;
           hitDir = normalize(mix(prevDir, dir, t));
           return true;
@@ -209,6 +221,9 @@
     vec3 rayDir = normalize(iCamRight * rdCam.x + iCamUp * rdCam.y + iCamForward * rdCam.z);
     rayDir = aberrateDirection(rayDir, iCamVel);
 
+    bool prograde = iDiskSense > 0.5;
+    float rISCO = iscoRadius(iSpin, prograde);
+
     vec3 hit = vec3(0.0);
     vec3 hitDir = vec3(0.0);
     vec3 skyDir = vec3(0.0);
@@ -216,7 +231,7 @@
     float fogOptical = 0.0;
     float fogGlow = 0.0;
     bool swallowed = false;
-    bool seenDisk = traceScene(iCamPos, rayDir, hit, hitDir, skyDir, bMin, swallowed, fogOptical, fogGlow);
+    bool seenDisk = traceScene(iCamPos, rayDir, rISCO, hit, hitDir, skyDir, bMin, swallowed, fogOptical, fogGlow);
 
     vec3 bg = skyColor(skyDir);
     float skyD = dopplerFactor(skyDir, iCamVel);
@@ -251,13 +266,13 @@
       float alpha = atan(hit.z, hit.x);
 
       float z1=redshift(rHit,alpha,iIncl);
-      float flux1=emissivity(rHit,alpha,iTime)*pow(1.0/z1,4.0);
+      float flux1=emissivity(rHit,alpha,iTime,rISCO)*pow(1.0/z1,4.0);
       flux1*=dust(vec2(rHit,alpha),iTime)*170.0;
       vec3 c1=tempColor(clamp(0.5+(1.0/z1-1.0)*1.2,0.0,1.0))*flux1;
 
-      float rGhost = rHit + 10.0 * exp(-abs(bMin - BC) * 1.7);
+      float rGhost = max(rISCO, rHit + 10.0 * exp(-abs(bMin - BC) * 1.7));
       float z2=redshift(rGhost,alpha+PI,iIncl);
-      float flux2=emissivity(rGhost,alpha+PI,iTime)*pow(1.0/z2,4.0);
+      float flux2=emissivity(rGhost,alpha+PI,iTime,rISCO)*pow(1.0/z2,4.0);
       flux2*=dust(vec2(rGhost,alpha+PI),iTime)*40.0;
       vec3 c2=tempColor(clamp(0.5+(1.0/z2-1.0)*1.2,0.0,1.0))*flux2*0.28;
 
@@ -320,6 +335,7 @@
   const uFovX = gl.getUniformLocation(prog, 'iFovX');
   const uCamVel = gl.getUniformLocation(prog, 'iCamVel');
   const uFogStrength = gl.getUniformLocation(prog, 'iFogStrength');
+  const uDiskSense = gl.getUniformLocation(prog, 'iDiskSense');
 
   const incVal = document.getElementById('incVal');
   const routVal = document.getElementById('routVal');
@@ -342,6 +358,8 @@
   const bendSliderVal = document.getElementById('bendSliderVal');
   const spinSlider = document.getElementById('spinSlider');
   const spinSliderVal = document.getElementById('spinSliderVal');
+  const progradeToggle = document.getElementById('progradeToggle');
+  const progradeVal = document.getElementById('progradeVal');
   const qualitySlider = document.getElementById('qualitySlider');
   const qualitySliderVal = document.getElementById('qualitySliderVal');
   const followOrbitToggle = document.getElementById('followOrbitToggle');
@@ -359,6 +377,7 @@
   let diskHalfThickness = 0.9;
   let bend = 1.0;
   let spin = 0.2;
+  let diskPrograde = true;
   let quality = 0.72;
   const fovX = 90.0;
   const fogStrength = 1.0;
@@ -387,6 +406,8 @@
     bendSliderVal.textContent = `${bend.toFixed(2)}x`;
     spinSlider.value = spin.toFixed(2);
     spinSliderVal.textContent = spin.toFixed(2);
+    progradeToggle.checked = diskPrograde;
+    progradeVal.textContent = diskPrograde ? "prograde" : "retrograde";
     qualitySlider.value = quality.toFixed(2);
     qualitySliderVal.textContent = quality.toFixed(2);
   }
@@ -532,6 +553,11 @@
     updateReadouts();
   });
 
+  progradeToggle.addEventListener('change', (e) => {
+    diskPrograde = e.target.checked;
+    updateReadouts();
+  });
+
   qualitySlider.addEventListener('input', (e) => {
     quality = parseFloat(e.target.value);
     updateReadouts();
@@ -632,6 +658,7 @@
     gl.uniform1f(uFovX, fovX);
     gl.uniform3f(uCamVel, basis.camVel[0], basis.camVel[1], basis.camVel[2]);
     gl.uniform1f(uFogStrength, fogStrength);
+    gl.uniform1f(uDiskSense, diskPrograde ? 1.0 : 0.0);
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
     requestAnimationFrame(render);
   }
