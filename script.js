@@ -246,11 +246,14 @@
       h *= mix(1.0, 0.72, clamp(10.0 / max(r, 0.1), 0.0, 1.0));
 
       float diskBand = exp(-abs(pos.y) / max(iDiskHalfThickness * 1.8, 0.05));
-      float radial = 1.0 - smoothstep(rISCO * 0.9, iRout * 1.4, length(pos.xz));
+      float rXZ = length(pos.xz);
+      float radial = smoothstep(rISCO * 0.7, rISCO * 1.2, rXZ)
+                   * (1.0 - smoothstep(iRout * 0.9, iRout * 1.4, rXZ));
       float hotInner = exp(-pow((length(pos.xz) - (rISCO + 1.0)) * 0.45, 2.0));
       float fogDensity = diskBand * radial;
-      fogOptical += fogDensity * h * 0.13 * iFogStrength;
-      fogGlow += fogDensity * (0.16 + 0.95 * hotInner) * h * iFogStrength;
+      float fogMask = step(0.01, fogDensity);
+      fogOptical += fogDensity * h * 0.13 * iFogStrength * fogMask;
+      fogGlow += fogDensity * (0.16 + 0.95 * hotInner) * h * iFogStrength * fogMask;
 
       vec3 prevPos = pos;
       vec3 prevDir = dir;
@@ -270,12 +273,14 @@
           float dust1 = dust(vec2(rCross, alpha), iTime) * mix(170.0, 220.0, iEmissionMode);
           vec3 c1 = diskColor(flux1, z1, dust1, rISCO);
 
-          float rGhost = max(rISCO, rCross + 10.0 * exp(-abs(bMin - BC) * 1.7));
+          float ghostOffset = 10.0 * exp(-abs(bMin - BC) * 1.7);
+          float rGhost = clamp(rCross + ghostOffset, rISCO, iRout * 0.95);
           float z2 = redshift(rGhost, alpha + PI, iIncl);
           float F2 = emissivity(rGhost, alpha + PI, iTime, rISCO);
           float flux2 = F2 * pow(1.0 / z2, 4.0);
           float dust2 = dust(vec2(rGhost, alpha + PI), iTime) * mix(40.0, 55.0, iEmissionMode);
-          vec3 c2 = diskColor(flux2, z2, dust2, rISCO) * 0.28;
+          float ghostWeight = 0.28 * smoothstep(0.0, 3.0, ghostOffset);
+          vec3 c2 = diskColor(flux2, z2, dust2, rISCO) * ghostWeight;
 
           float thicknessFade = smoothstep(iDiskHalfThickness, 0.0, abs(crossPos.y));
           float dopplerAniso = 0.75 + 0.25 * clamp(dot(normalize(vec3(-crossPos.z,0.0,crossPos.x)), -crossDir), -1.0, 1.0);
@@ -577,7 +582,13 @@
     const skimHeight = 0.25 * Math.sin(orbitalAngle * 0.5);
     const camPos = [x, skimHeight, z];
     const vy = 0.25 * 0.5 * Math.cos(orbitalAngle * 0.5) * dThetaDt;
-    const camVel = [vxOrb, vy, vzOrb];
+    const velLen = Math.hypot(vxOrb, vy, vzOrb) || 1e-6;
+    const betaKepler = Math.min(1.0 / Math.sqrt(Math.max(radius, 3.0)), 0.85);
+    const camVel = [
+      vxOrb / velLen * betaKepler,
+      vy / velLen * betaKepler,
+      vzOrb / velLen * betaKepler,
+    ];
     const forward = tangent;
 
     const worldUp = [0, 1, 0];
