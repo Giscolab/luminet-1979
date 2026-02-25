@@ -37,6 +37,7 @@
   uniform float iLodMin;
   uniform float iLodMax;
   uniform float iCamSpeedFiltered;
+  uniform float iExposure;
 
   #define PI 3.141592653589793
   #define BC 5.196152
@@ -145,10 +146,16 @@
     float redShift = clamp(1.0 - doppler, 0.0, 1.2);
     vec3 blue = vec3(0.78, 0.9, 1.15);
     vec3 red = vec3(1.2, 0.74, 0.55);
-    col *= mix(vec3(1.0), blue, blueShift * 0.6);
-    col *= mix(vec3(1.0), red, redShift * 0.55);
-    col *= mix(0.65, 1.55, clamp(doppler, 0.45, 1.55) - 0.45);
-    return col;
+    float baseLuma = max(dot(col, vec3(0.2126, 0.7152, 0.0722)), 1e-5);
+    vec3 tinted = col;
+    tinted *= mix(vec3(1.0), blue, blueShift * 0.6);
+    tinted *= mix(vec3(1.0), red, redShift * 0.55);
+    float tintedLuma = max(dot(tinted, vec3(0.2126, 0.7152, 0.0722)), 1e-5);
+    return tinted * (baseLuma / tintedLuma);
+  }
+
+  vec3 tonemapGlobal(vec3 hdr){
+    return aces(max(hdr * iExposure, vec3(0.0)));
   }
 
   vec3 geoAccel(vec3 pos, vec3 dir, float L2){
@@ -268,23 +275,24 @@
           float alpha = atan(crossPos.z, crossPos.x);
 
           float z1 = redshift(rCross, alpha, iIncl);
-          float F1 = emissivity(rCross, alpha, iTime, rISCO);
-          float flux1 = F1 * pow(1.0 / z1, 4.0);
+          float g1 = 1.0 / max(z1, 1e-4);
+          float Iem1 = emissivity(rCross, alpha, iTime, rISCO);
+          float Iobs1 = pow(g1, 4.0) * Iem1;
           float dust1 = dust(vec2(rCross, alpha), iTime) * mix(170.0, 220.0, iEmissionMode);
-          vec3 c1 = diskColor(flux1, z1, dust1, rISCO);
+          vec3 c1 = diskColor(Iobs1, z1, dust1, rISCO);
 
           float ghostOffset = 10.0 * exp(-abs(bMin - BC) * 1.7);
           float rGhost = clamp(rCross + ghostOffset, rISCO, iRout * 0.95);
           float z2 = redshift(rGhost, alpha + PI, iIncl);
-          float F2 = emissivity(rGhost, alpha + PI, iTime, rISCO);
-          float flux2 = F2 * pow(1.0 / z2, 4.0);
+          float g2 = 1.0 / max(z2, 1e-4);
+          float Iem2 = emissivity(rGhost, alpha + PI, iTime, rISCO);
+          float Iobs2 = pow(g2, 4.0) * Iem2;
           float dust2 = dust(vec2(rGhost, alpha + PI), iTime) * mix(40.0, 55.0, iEmissionMode);
           float ghostWeight = 0.28 * smoothstep(0.0, 3.0, ghostOffset);
-          vec3 c2 = diskColor(flux2, z2, dust2, rISCO) * ghostWeight;
+          vec3 c2 = diskColor(Iobs2, z2, dust2, rISCO) * ghostWeight;
 
           float thicknessFade = smoothstep(iDiskHalfThickness, 0.0, abs(crossPos.y));
-          float dopplerAniso = 0.75 + 0.25 * clamp(dot(normalize(vec3(-crossPos.z,0.0,crossPos.x)), -crossDir), -1.0, 1.0);
-          vec3 crossingCol = (c1 + c2) * thicknessFade * dopplerAniso;
+          vec3 crossingCol = (c1 + c2) * thicknessFade;
           crossingCol = applyDopplerTint(crossingCol, dopplerFactor(crossDir, iCamVel));
 
           float radialNorm = clamp((rCross - rISCO) / max(iRout - rISCO, 1e-3), 0.0, 1.0);
@@ -342,6 +350,7 @@
       bg = vec3(0.0);
       bg += vec3(0.95, 0.66, 0.35) * photonRing * 0.45;
       bg = applyDopplerTint(bg, dopplerFactor(rayDir, iCamVel));
+      bg = tonemapGlobal(bg);
       fragColor = vec4(pow(bg, vec3(1.0 / 2.2)), 1.0);
       return;
     }
@@ -351,7 +360,8 @@
       bg=mix(bg*0.03,vec3(0.0),edge);
       float glow=smoothstep(BC,BC-0.8,bMin)*0.3;
       bg+=vec3(0.55,0.32,0.1)*glow*(0.8+0.4*sin(iTime*5.0));
-      fragColor=vec4(bg,1.0); return;
+      bg = tonemapGlobal(bg);
+      fragColor=vec4(pow(bg,vec3(1.0/2.2)),1.0); return;
     }
 
     vec3 col=bg;
@@ -363,8 +373,8 @@
 
     if(seenDisk) col += diskAccum;
 
-    col=aces(col*1.2);
     if(iBloom>0.5) col=bloom(col,1.0);
+    col=tonemapGlobal(col);
     float vignette=1.0-0.2*length(p*1.1);
     col*=vignette;
     col=pow(col,vec3(1.0/2.2));
@@ -422,6 +432,7 @@
   const uLodMin = gl.getUniformLocation(prog, 'iLodMin');
   const uLodMax = gl.getUniformLocation(prog, 'iLodMax');
   const uCamSpeedFiltered = gl.getUniformLocation(prog, 'iCamSpeedFiltered');
+  const uExposure = gl.getUniformLocation(prog, 'iExposure');
 
   const incVal = document.getElementById('incVal');
   const routVal = document.getElementById('routVal');
@@ -456,6 +467,8 @@
   const lodMaxVal = document.getElementById('lodMaxVal');
   const maxDiskCrossingsSlider = document.getElementById('maxDiskCrossingsSlider');
   const maxDiskCrossingsVal = document.getElementById('maxDiskCrossingsVal');
+  const exposureSlider = document.getElementById('exposureSlider');
+  const exposureVal = document.getElementById('exposureVal');
   const followOrbitToggle = document.getElementById('followOrbitToggle');
   const emissionModeToggle = document.getElementById('emissionModeToggle');
   const emissionModeVal = document.getElementById('emissionModeVal');
@@ -480,6 +493,7 @@
   let lodMax = 0.90;
   let filteredCamSpeed = 0.0;
   let maxDiskCrossings = 4;
+  let exposure = 1.0;
   let ntEmissionMode = true;
   const fovX = 90.0;
   const fogStrength = 1.0;
@@ -520,6 +534,8 @@
     lodMaxVal.textContent = lodMax.toFixed(2);
     maxDiskCrossingsSlider.value = String(maxDiskCrossings);
     maxDiskCrossingsVal.textContent = String(maxDiskCrossings);
+    exposureSlider.value = exposure.toFixed(2);
+    exposureVal.textContent = `${exposure.toFixed(2)}x`;
     emissionModeToggle.checked = ntEmissionMode;
     emissionModeVal.textContent = ntEmissionMode ? "NT" : "stylized/legacy";
   }
@@ -703,6 +719,11 @@
     updateReadouts();
   });
 
+  exposureSlider.addEventListener('input', (e) => {
+    exposure = parseFloat(e.target.value);
+    updateReadouts();
+  });
+
   followOrbitToggle.addEventListener('change', (e) => {
     followOrbit = e.target.checked;
     yawSlider.disabled = followOrbit;
@@ -826,6 +847,7 @@
     gl.uniform1f(uLodMin, lodMin);
     gl.uniform1f(uLodMax, lodMax);
     gl.uniform1f(uCamSpeedFiltered, filteredCamSpeed);
+    gl.uniform1f(uExposure, exposure);
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
     requestAnimationFrame(render);
   }
