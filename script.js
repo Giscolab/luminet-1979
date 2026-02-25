@@ -6,12 +6,10 @@
     return;
   }
 
-  // Vertex shader
   const vsSource = `#version 300 es
   in vec2 aPos;
   void main(){ gl_Position = vec4(aPos,0.0,1.0); }`;
 
-  // Fragment shader
   const fsSource = `#version 300 es
   precision highp float;
   out vec4 fragColor;
@@ -27,14 +25,16 @@
   uniform vec3 iCamForward;
   uniform float iDiskHalfThickness;
   uniform float iBend;
+  uniform float iSpin;
+  uniform float iQuality;
 
   #define PI 3.141592653589793
   #define ISCO 6.0
   #define BC 5.196152
+  #define HORIZON 2.0
+  #define MAX_STEPS 220
 
   float hash(vec2 p){ return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453); }
-  float r_lens_primary(float b){ return b+2.0+4.0/max(b,0.001); }
-  float r_lens_secondary(float b){ float d=abs(b-BC); return ISCO+60.0*exp(-d*1.8); }
   float redshift(float r,float phi,float incl){ float v=1.0/sqrt(max(r-3.0,0.001)); return max((1.0+v*cos(phi)*sin(incl))/sqrt(max(1.0-3.0/r,0.001)),0.001); }
   float emissivity(float r,float phi,float t){
     if(r<ISCO || r>iRout) return 0.0;
@@ -43,18 +43,88 @@
     float flare=pow(sin(spin*20.0+r*0.5)*0.5+0.5,4.0)*0.3;
     return base*(1.0+flare);
   }
-  float dust(vec2 pos,float t){ float r=pos.x; float phi=pos.y; float rot=t*0.15*iSpeed*pow(max(r,0.001),-1.2); float angle=phi+rot; vec2 q=vec2(floor(r*0.8),floor(angle*12.0/PI)); float s=hash(q); float c=hash(vec2(floor(r*2.3),floor(angle*28.0))); return 0.55+0.28*s+0.17*c; }
+  float dust(vec2 pos,float t){
+    float r=pos.x; float phi=pos.y;
+    float rot=t*0.15*iSpeed*pow(max(r,0.001),-1.2);
+    float angle=phi+rot;
+    vec2 q=vec2(floor(r*0.8),floor(angle*12.0/PI));
+    float s=hash(q);
+    float c=hash(vec2(floor(r*2.3),floor(angle*28.0)));
+    return 0.55+0.28*s+0.17*c;
+  }
   vec3 tempColor(float T){ T=clamp(T,0.0,1.0); vec3 c0=vec3(0.5,0.0,0.0), c1=vec3(1.0,0.2,0.0), c2=vec3(1.0,0.72,0.2), c3=vec3(1.0,0.98,0.9), c4=vec3(0.72,0.85,1.0); if(T<0.25) return mix(c0,c1,T/0.25); else if(T<0.55) return mix(c1,c2,(T-0.25)/0.30); else if(T<0.80) return mix(c2,c3,(T-0.55)/0.25); else return mix(c3,c4,(T-0.80)/0.20); }
   vec3 aces(vec3 x){ const float a=2.51,b=0.03,c=2.43,d=0.59,e=0.14; return clamp((x*(a*x+b))/(x*(c*x+d)+e),0.0,1.0); }
   vec3 bloom(vec3 col,float intensity){ float l=dot(col,vec3(0.2126,0.7152,0.0722)); if(l>0.8) col+=vec3(0.4,0.3,0.2)*(l-0.8)*2.0*intensity; return col; }
 
-  float slabHit(vec3 ro, vec3 rd, float y0, float halfThick){
-    if(abs(rd.y) < 0.0001) return -1.0;
-    float t = (y0 - ro.y) / rd.y;
-    if(t < 0.0) return -1.0;
-    vec3 p = ro + rd * t;
-    if(abs(p.y - y0) > halfThick) return -1.0;
-    return t;
+  vec3 geoAccel(vec3 pos, vec3 dir, float L2){
+    float r = max(length(pos), 0.001);
+    float grav = -1.5 * iBend * L2 / pow(r, 5.0);
+    vec3 acc = grav * pos;
+
+    float frameDrag = 0.75 * iSpin * L2 / pow(r, 4.0);
+    vec3 omega = vec3(0.0, frameDrag, 0.0);
+    acc += cross(omega, dir);
+    return acc;
+  }
+
+  void rk4Step(inout vec3 pos, inout vec3 dir, float h, float L2){
+    vec3 k1p = dir;
+    vec3 k1v = geoAccel(pos, dir, L2);
+
+    vec3 p2 = pos + 0.5 * h * k1p;
+    vec3 v2 = normalize(dir + 0.5 * h * k1v);
+    vec3 k2p = v2;
+    vec3 k2v = geoAccel(p2, v2, L2);
+
+    vec3 p3 = pos + 0.5 * h * k2p;
+    vec3 v3 = normalize(dir + 0.5 * h * k2v);
+    vec3 k3p = v3;
+    vec3 k3v = geoAccel(p3, v3, L2);
+
+    vec3 p4 = pos + h * k3p;
+    vec3 v4 = normalize(dir + h * k3v);
+    vec3 k4p = v4;
+    vec3 k4v = geoAccel(p4, v4, L2);
+
+    pos += h * (k1p + 2.0*k2p + 2.0*k3p + k4p) / 6.0;
+    dir = normalize(dir + h * (k1v + 2.0*k2v + 2.0*k3v + k4v) / 6.0);
+  }
+
+  bool traceDisk(vec3 ro, vec3 rd, out vec3 hit, out vec3 hitDir, out float bMin){
+    vec3 pos = ro;
+    vec3 dir = rd;
+    float L2 = dot(cross(ro, rd), cross(ro, rd));
+    float prevY = pos.y;
+    bMin = 1e9;
+
+    for (int i = 0; i < MAX_STEPS; i++) {
+      if (float(i) > mix(90.0, float(MAX_STEPS), iQuality)) break;
+
+      float r = length(pos);
+      bMin = min(bMin, length(cross(pos, dir)));
+      if (r < HORIZON) return false;
+      if (r > 130.0) return false;
+
+      float stepFar = mix(0.45, 1.4, clamp((r - 8.0) / 55.0, 0.0, 1.0));
+      float h = stepFar / mix(1.5, 0.7, iQuality);
+      h *= mix(1.0, 0.72, clamp(10.0 / max(r, 0.1), 0.0, 1.0));
+
+      vec3 prevPos = pos;
+      vec3 prevDir = dir;
+      rk4Step(pos, dir, h, L2);
+
+      if (sign(prevY) != sign(pos.y)) {
+        float t = prevY / (prevY - pos.y);
+        vec3 crossPos = mix(prevPos, pos, t);
+        if (abs(crossPos.y) <= iDiskHalfThickness && length(crossPos.xz) > ISCO && length(crossPos.xz) < iRout) {
+          hit = crossPos;
+          hitDir = normalize(mix(prevDir, dir, t));
+          return true;
+        }
+      }
+      prevY = pos.y;
+    }
+    return false;
   }
 
   void main(){
@@ -64,51 +134,44 @@
     vec3 rdCam = normalize(vec3(p.x, p.y, 1.75));
     vec3 rayDir = normalize(iCamRight * rdCam.x + iCamUp * rdCam.y + iCamForward * rdCam.z);
 
-    float bGeo = length(cross(iCamPos, rayDir));
-    float bendFactor = 1.0 + iBend * 2.0 / max(bGeo, 1.0);
-    vec3 toCenter = normalize(-iCamPos);
-    vec3 curvedRay = normalize(mix(rayDir, toCenter, clamp((bendFactor - 1.0) * 0.22, 0.0, 0.85)));
-
     float twink=sin(iTime*2.0+gl_FragCoord.x*0.01)*0.2+0.8;
     float stars=step(0.985,hash(floor(uv*18.0)))*(0.3+0.7*hash(uv*37.3))*twink;
     vec3 bg=vec3(stars*0.8,stars*0.85,stars);
 
-    float horizonDist = length(cross(iCamPos, curvedRay));
-    if(horizonDist < BC){
-      float edge=smoothstep(BC,BC-0.3,horizonDist);
-      bg=mix(bg*0.05,vec3(0.0),edge);
-      float glow=smoothstep(BC,BC-0.5,horizonDist)*0.2;
-      bg+=vec3(0.5,0.3,0.1)*glow*(0.8+0.4*sin(iTime*5.0));
+    vec3 hit = vec3(0.0);
+    vec3 hitDir = vec3(0.0);
+    float bMin;
+    bool seenDisk = traceDisk(iCamPos, rayDir, hit, hitDir, bMin);
+
+    if (!seenDisk && bMin < BC) {
+      float edge=smoothstep(BC,BC-0.5,bMin);
+      bg=mix(bg*0.03,vec3(0.0),edge);
+      float glow=smoothstep(BC,BC-0.8,bMin)*0.3;
+      bg+=vec3(0.55,0.32,0.1)*glow*(0.8+0.4*sin(iTime*5.0));
       fragColor=vec4(bg,1.0); return;
     }
 
     vec3 col=bg;
-    col+=vec3(0.9,0.6,0.3)*exp(-pow((horizonDist-BC)*1.5,2.0))*0.06;
+    col+=vec3(0.9,0.6,0.3)*exp(-pow((bMin-BC)*1.3,2.0))*0.08;
 
-    float tDisk = slabHit(iCamPos, curvedRay, 0.0, iDiskHalfThickness);
-    vec3 hit = iCamPos + curvedRay * max(tDisk, 0.0);
-    float rHit = length(hit.xz);
-    float alpha = atan(hit.z, hit.x);
+    if(seenDisk){
+      float rHit = length(hit.xz);
+      float alpha = atan(hit.z, hit.x);
 
-    if(tDisk > 0.0){
-      float b = max(horizonDist, 0.25);
-      float r1 = max(rHit, r_lens_primary(b));
-      float z1=redshift(r1,alpha,iIncl);
-      float flux1=emissivity(r1,alpha,iTime)*pow(1.0/z1,4.0);
-      flux1*=dust(vec2(r1,alpha),iTime)*200.0;
+      float z1=redshift(rHit,alpha,iIncl);
+      float flux1=emissivity(rHit,alpha,iTime)*pow(1.0/z1,4.0);
+      flux1*=dust(vec2(rHit,alpha),iTime)*170.0;
       vec3 c1=tempColor(clamp(0.5+(1.0/z1-1.0)*1.2,0.0,1.0))*flux1;
 
-      vec3 c2=vec3(0.0);
-      if(b<25.0){
-        float r2=r_lens_secondary(b);
-        float z2=redshift(r2,alpha+PI,iIncl);
-        float flux2=emissivity(r2,alpha+PI,iTime)*pow(1.0/z2,4.0);
-        flux2*=dust(vec2(r2,alpha+PI),iTime)*60.0;
-        c2=tempColor(clamp(0.5+(1.0/z2-1.0)*1.2,0.0,1.0))*flux2*0.3;
-      }
+      float rGhost = rHit + 10.0 * exp(-abs(bMin - BC) * 1.7);
+      float z2=redshift(rGhost,alpha+PI,iIncl);
+      float flux2=emissivity(rGhost,alpha+PI,iTime)*pow(1.0/z2,4.0);
+      flux2*=dust(vec2(rGhost,alpha+PI),iTime)*40.0;
+      vec3 c2=tempColor(clamp(0.5+(1.0/z2-1.0)*1.2,0.0,1.0))*flux2*0.28;
 
       float thicknessFade = smoothstep(iDiskHalfThickness, 0.0, abs(hit.y));
-      col += (c1 + c2) * thicknessFade;
+      float dopplerAniso = 0.75 + 0.25 * clamp(dot(normalize(vec3(-hit.z,0.0,hit.x)), -hitDir), -1.0, 1.0);
+      col += (c1 + c2) * thicknessFade * dopplerAniso;
     }
 
     col=aces(col*1.2);
@@ -158,6 +221,8 @@
   const uCamForward = gl.getUniformLocation(prog, 'iCamForward');
   const uDiskHalfThickness = gl.getUniformLocation(prog, 'iDiskHalfThickness');
   const uBend = gl.getUniformLocation(prog, 'iBend');
+  const uSpin = gl.getUniformLocation(prog, 'iSpin');
+  const uQuality = gl.getUniformLocation(prog, 'iQuality');
 
   const incVal = document.getElementById('incVal');
   const routVal = document.getElementById('routVal');
@@ -178,6 +243,10 @@
   const thickSliderVal = document.getElementById('thickSliderVal');
   const bendSlider = document.getElementById('bendSlider');
   const bendSliderVal = document.getElementById('bendSliderVal');
+  const spinSlider = document.getElementById('spinSlider');
+  const spinSliderVal = document.getElementById('spinSliderVal');
+  const qualitySlider = document.getElementById('qualitySlider');
+  const qualitySliderVal = document.getElementById('qualitySliderVal');
   const modeNormal = document.getElementById('modeNormal');
   const modeBloom = document.getElementById('modeBloom');
   const crosshair = document.getElementById('crosshair');
@@ -191,6 +260,8 @@
   let camDist = 38.0;
   let diskHalfThickness = 0.9;
   let bend = 1.0;
+  let spin = 0.2;
+  let quality = 0.72;
 
   function updateReadouts() {
     const inclDeg = (incl * 180 / Math.PI).toFixed(1);
@@ -212,6 +283,10 @@
     thickSliderVal.textContent = diskHalfThickness.toFixed(2);
     bendSlider.value = bend.toFixed(2);
     bendSliderVal.textContent = `${bend.toFixed(2)}x`;
+    spinSlider.value = spin.toFixed(2);
+    spinSliderVal.textContent = spin.toFixed(2);
+    qualitySlider.value = quality.toFixed(2);
+    qualitySliderVal.textContent = quality.toFixed(2);
   }
 
   function setBloomMode(enabled) {
@@ -308,13 +383,23 @@
     updateReadouts();
   });
 
+  spinSlider.addEventListener('input', (e) => {
+    spin = parseFloat(e.target.value);
+    updateReadouts();
+  });
+
+  qualitySlider.addEventListener('input', (e) => {
+    quality = parseFloat(e.target.value);
+    updateReadouts();
+  });
+
   modeNormal.addEventListener('click', () => setBloomMode(false));
   modeBloom.addEventListener('click', () => setBloomMode(true));
 
   document.addEventListener('keydown', (e) => {
     const key = e.key.toLowerCase();
     if (key === 'a') setModeBadge('▸ ANALYTIQUE — Luminet Eq.A3');
-    if (key === 'g') setModeBadge('▸ GÉODÉSIQUE — approximation orbitale 3D', 'geodesic');
+    if (key === 'g') setModeBadge('▸ GÉODÉSIQUE RK4 — Schwarzschild/Kerr-lite', 'geodesic');
     if (key === 'l') setModeBadge('▸ LUT — mode expérimental', 'lut');
   });
 
@@ -384,6 +469,8 @@
     gl.uniform3f(uCamForward, basis.forward[0], basis.forward[1], basis.forward[2]);
     gl.uniform1f(uDiskHalfThickness, diskHalfThickness);
     gl.uniform1f(uBend, bend);
+    gl.uniform1f(uSpin, spin);
+    gl.uniform1f(uQuality, quality);
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
     requestAnimationFrame(render);
   }

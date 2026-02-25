@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial=1.0">
-  <title>Disque d’accrétion – Trou noir de Schwarzschild</title>
+  <title>Disque d’accrétion – Intégrateur géodésique RK4</title>
   <link rel="stylesheet" href="style.css">
 </head>
 
@@ -79,6 +79,16 @@
         <input type="range" id="bendSlider" min="0.2" max="2.0" step="0.01" value="1.0">
         <span id="bendSliderVal">1.00x</span>
       </div>
+      <div class="control-group">
+        <label for="spinSlider">Spin a:</label>
+        <input type="range" id="spinSlider" min="-0.99" max="0.99" step="0.01" value="0.20">
+        <span id="spinSliderVal">0.20</span>
+      </div>
+      <div class="control-group">
+        <label for="qualitySlider">Qualité:</label>
+        <input type="range" id="qualitySlider" min="0.25" max="1.0" step="0.01" value="0.72">
+        <span id="qualitySliderVal">0.72</span>
+      </div>
     </div>
 
     <!-- Nouveau panneau pour les modes -->
@@ -87,7 +97,7 @@
       <button id="modeBloom" class="mode-btn">BLOOM</button>
     </div>
 
-    <div id="mode-badge">▸ ANALYTIQUE — Luminet Eq.A3</div>
+    <div id="mode-badge">▸ GÉODÉSIQUE RK4 — Schwarzschild/Kerr-lite</div>
   </div>
 
   <script src="script.js"></script>
