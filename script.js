@@ -1,8 +1,10 @@
-
-(async function(){
+(async function () {
   const canvas = document.getElementById('c');
   const gl = canvas.getContext('webgl2');
-  if(!gl){ alert('WebGL2 requis'); return; }
+  if (!gl) {
+    alert('WebGL2 requis');
+    return;
+  }
 
   // Vertex shader
   const vsSource = `#version 300 es
@@ -29,7 +31,7 @@
   float r_lens_secondary(float b){ float d=abs(b-BC); return ISCO+60.0*exp(-d*1.8); }
   float redshift(float r,float phi,float incl){ float v=1.0/sqrt(max(r-3.0,0.001)); return max((1.0+v*cos(phi)*sin(incl))/sqrt(max(1.0-3.0/r,0.001)),0.001); }
   float emissivity(float r,float phi,float t){
-    if(r<ISCO) return 0.0;
+    if(r<ISCO || r>iRout) return 0.0;
     float base=(1.0-sqrt(ISCO/r))*pow(r,-3.0);
     float spin=fract(phi/(2.0*PI)+t*0.1*iSpeed);
     float flare=pow(sin(spin*20.0+r*0.5)*0.5+0.5,4.0)*0.3;
@@ -38,7 +40,7 @@
   float dust(vec2 pos,float t){ float r=pos.x; float phi=pos.y; float rot=t*0.15*iSpeed*pow(r,-1.2); float angle=phi+rot; vec2 q=vec2(floor(r*0.8),floor(angle*12.0/PI)); float s=hash(q); float c=hash(vec2(floor(r*2.3),floor(angle*28.0))); return 0.55+0.28*s+0.17*c; }
   vec3 tempColor(float T){ T=clamp(T,0.0,1.0); vec3 c0=vec3(0.5,0.0,0.0), c1=vec3(1.0,0.2,0.0), c2=vec3(1.0,0.72,0.2), c3=vec3(1.0,0.98,0.9), c4=vec3(0.72,0.85,1.0); if(T<0.25) return mix(c0,c1,T/0.25); else if(T<0.55) return mix(c1,c2,(T-0.25)/0.30); else if(T<0.80) return mix(c2,c3,(T-0.55)/0.25); else return mix(c3,c4,(T-0.80)/0.20); }
   vec3 aces(vec3 x){ const float a=2.51,b=0.03,c=2.43,d=0.59,e=0.14; return clamp((x*(a*x+b))/(x*(c*x+d)+e),0.0,1.0); }
-  vec3 bloom(vec3 col,float intensity){ float l=dot(col,vec3(0.2126,0.7152,0.0722)); if(l>0.8) col+=vec3(0.4,0.3,0.2)*(l-0.8)*2.0; return col; }
+  vec3 bloom(vec3 col,float intensity){ float l=dot(col,vec3(0.2126,0.7152,0.0722)); if(l>0.8) col+=vec3(0.4,0.3,0.2)*(l-0.8)*2.0*intensity; return col; }
 
   void main(){
     vec2 uv=(gl_FragCoord.xy-0.5*iResolution.xy)/iResolution.y*30.0;
@@ -83,71 +85,163 @@
     fragColor=vec4(col,1.0);
   }`;
 
-  function compileShader(type, source){
-    const shader=gl.createShader(type);
+  function compileShader(type, source) {
+    const shader = gl.createShader(type);
     gl.shaderSource(shader, source);
     gl.compileShader(shader);
-    if(!gl.getShaderParameter(shader,gl.COMPILE_STATUS)){
+    if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
       console.error(gl.getShaderInfoLog(shader));
     }
     return shader;
   }
 
-  const vs=compileShader(gl.VERTEX_SHADER, vsSource);
-  const fs=compileShader(gl.FRAGMENT_SHADER, fsSource);
-  const prog=gl.createProgram();
+  const vs = compileShader(gl.VERTEX_SHADER, vsSource);
+  const fs = compileShader(gl.FRAGMENT_SHADER, fsSource);
+  const prog = gl.createProgram();
   gl.attachShader(prog, vs);
   gl.attachShader(prog, fs);
   gl.linkProgram(prog);
   gl.useProgram(prog);
 
-  const vao=gl.createVertexArray();
+  const vao = gl.createVertexArray();
   gl.bindVertexArray(vao);
-  const buf=gl.createBuffer();
+  const buf = gl.createBuffer();
   gl.bindBuffer(gl.ARRAY_BUFFER, buf);
-  gl.bufferData(gl.ARRAY_BUFFER,new Float32Array([-1,-1,1,-1,-1,1,1,1]),gl.STATIC_DRAW);
-  const posLoc=gl.getAttribLocation(prog,'aPos');
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
+  const posLoc = gl.getAttribLocation(prog, 'aPos');
   gl.enableVertexAttribArray(posLoc);
-  gl.vertexAttribPointer(posLoc,2,gl.FLOAT,false,0,0);
+  gl.vertexAttribPointer(posLoc, 2, gl.FLOAT, false, 0, 0);
 
-  const uRes=gl.getUniformLocation(prog,'iResolution');
-  const uTime=gl.getUniformLocation(prog,'iTime');
-  const uIncl=gl.getUniformLocation(prog,'iIncl');
-  const uRout=gl.getUniformLocation(prog,'iRout');
-  const uSpeed=gl.getUniformLocation(prog,'iSpeed');
-  const uBloom=gl.getUniformLocation(prog,'iBloom');
+  const uRes = gl.getUniformLocation(prog, 'iResolution');
+  const uTime = gl.getUniformLocation(prog, 'iTime');
+  const uIncl = gl.getUniformLocation(prog, 'iIncl');
+  const uRout = gl.getUniformLocation(prog, 'iRout');
+  const uSpeed = gl.getUniformLocation(prog, 'iSpeed');
+  const uBloom = gl.getUniformLocation(prog, 'iBloom');
 
-  let incl=83*Math.PI/180, rout=36.0, speed=1.0, bloomMode=0;
+  const incVal = document.getElementById('incVal');
+  const routVal = document.getElementById('routVal');
+  const modeBadge = document.getElementById('mode-badge');
+  const incSlider = document.getElementById('incSlider');
+  const incSliderVal = document.getElementById('incSliderVal');
+  const routSlider = document.getElementById('routSlider');
+  const routSliderVal = document.getElementById('routSliderVal');
+  const rotSlider = document.getElementById('rotSlider');
+  const rotSliderVal = document.getElementById('rotSliderVal');
+  const modeNormal = document.getElementById('modeNormal');
+  const modeBloom = document.getElementById('modeBloom');
+  const crosshair = document.getElementById('crosshair');
 
-  function resize(){
-    const dpr=window.devicePixelRatio||1;
-    canvas.width=Math.floor(canvas.clientWidth*dpr);
-    canvas.height=Math.floor(canvas.clientHeight*dpr);
-    gl.viewport(0,0,canvas.width,canvas.height);
+  let incl = 83 * Math.PI / 180;
+  let rout = 36.0;
+  let speed = 1.0;
+  let bloomMode = 0;
+
+  function updateReadouts() {
+    const inclDeg = (incl * 180 / Math.PI).toFixed(1);
+    incVal.textContent = `${inclDeg}°`;
+    routVal.textContent = rout.toFixed(1);
+    incSlider.value = inclDeg;
+    incSliderVal.textContent = `${inclDeg}°`;
+    routSlider.value = rout.toFixed(1);
+    routSliderVal.textContent = rout.toFixed(1);
+    rotSlider.value = speed.toFixed(2);
+    rotSliderVal.textContent = `${speed.toFixed(2)}x`;
   }
-  window.addEventListener('resize',resize);
+
+  function setBloomMode(enabled) {
+    bloomMode = enabled ? 1 : 0;
+    modeNormal.classList.toggle('active', !enabled);
+    modeBloom.classList.toggle('active', enabled);
+  }
+
+  function setModeBadge(text, cssClass = '') {
+    modeBadge.textContent = text;
+    modeBadge.className = cssClass;
+  }
+
+  incSlider.addEventListener('input', (e) => {
+    incl = parseFloat(e.target.value) * Math.PI / 180;
+    updateReadouts();
+  });
+
+  routSlider.addEventListener('input', (e) => {
+    rout = parseFloat(e.target.value);
+    updateReadouts();
+  });
+
+  rotSlider.addEventListener('input', (e) => {
+    speed = parseFloat(e.target.value);
+    updateReadouts();
+  });
+
+  modeNormal.addEventListener('click', () => setBloomMode(false));
+  modeBloom.addEventListener('click', () => setBloomMode(true));
+
+  document.addEventListener('keydown', (e) => {
+    const key = e.key.toLowerCase();
+    if (key === 'a') setModeBadge('▸ ANALYTIQUE — Luminet Eq.A3');
+    if (key === 'g') setModeBadge('▸ GÉODÉSIQUE — approximation', 'geodesic');
+    if (key === 'l') setModeBadge('▸ LUT — mode expérimental', 'lut');
+  });
+
+  let dragging = false;
+  function pointerToParams(clientX, clientY) {
+    const xNorm = clientX / window.innerWidth;
+    const yNorm = clientY / window.innerHeight;
+    incl = (5 + yNorm * 85) * Math.PI / 180;
+    rout = 10 + xNorm * 50;
+    updateReadouts();
+  }
+
+  window.addEventListener('pointerdown', (e) => {
+    dragging = true;
+    crosshair.style.display = 'block';
+    pointerToParams(e.clientX, e.clientY);
+  });
+
+  window.addEventListener('pointermove', (e) => {
+    crosshair.style.left = `${e.clientX}px`;
+    crosshair.style.top = `${e.clientY}px`;
+    if (dragging) pointerToParams(e.clientX, e.clientY);
+  });
+
+  window.addEventListener('pointerup', () => {
+    dragging = false;
+    crosshair.style.display = 'none';
+  });
+
+  function resize() {
+    const dpr = window.devicePixelRatio || 1;
+    canvas.width = Math.floor(canvas.clientWidth * dpr);
+    canvas.height = Math.floor(canvas.clientHeight * dpr);
+    gl.viewport(0, 0, canvas.width, canvas.height);
+  }
+  window.addEventListener('resize', resize);
   resize();
+  updateReadouts();
+  setBloomMode(false);
 
-  let lastTime=0, frames=0, fpsTimer=0;
-  const fpsSpan=document.getElementById('fps');
+  let frames = 0;
+  let fpsTimer = 0;
+  const fpsSpan = document.getElementById('fps');
 
-  function render(now){
-    now*=0.001;
+  function render(now) {
+    now *= 0.001;
     frames++;
-    if(now-fpsTimer>=1.0){
-      fpsSpan.textContent=Math.round(frames/(now-fpsTimer))+' fps';
-      frames=0;
-      fpsTimer=now;
+    if (now - fpsTimer >= 1.0) {
+      fpsSpan.textContent = `${Math.round(frames / (now - fpsTimer))} fps`;
+      frames = 0;
+      fpsTimer = now;
     }
-    gl.uniform2f(uRes,canvas.width,canvas.height);
-    gl.uniform1f(uTime,now);
-    gl.uniform1f(uIncl,incl);
-    gl.uniform1f(uRout,rout);
-    gl.uniform1f(uSpeed,speed);
-    gl.uniform1f(uBloom,bloomMode);
-    gl.drawArrays(gl.TRIANGLE_STRIP,0,4);
+    gl.uniform2f(uRes, canvas.width, canvas.height);
+    gl.uniform1f(uTime, now);
+    gl.uniform1f(uIncl, incl);
+    gl.uniform1f(uRout, rout);
+    gl.uniform1f(uSpeed, speed);
+    gl.uniform1f(uBloom, bloomMode);
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
     requestAnimationFrame(render);
   }
   requestAnimationFrame(render);
 })();
-
