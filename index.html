@@ -1,0 +1,71 @@
+<html lang="fr">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial=1.0">
+  <title>Disque d’accrétion – Trou noir de Schwarzschild</title>
+  <style></style>
+</head>
+
+<body>
+  <div class="progress-container">
+    <div id="lut-progress"></div>
+  </div>
+
+  <canvas id="c"></canvas>
+
+  <div id="crosshair"></div>
+
+  <div class="hint">
+    <kbd>A</kbd> · <kbd>G</kbd> · <kbd>L</kbd> modes &nbsp;&nbsp; | &nbsp;&nbsp; souris / tactile : inclinaison / rayon externe
+  </div>
+
+  <div class="overlay">
+    <div class="panel">
+      <div class="stat">
+        <span class="stat-label">inclinaison</span>
+        <span class="stat-value" id="incVal">83.0°</span>
+      </div>
+      <div class="stat">
+        <span class="stat-label">rayon ext.</span>
+        <span class="stat-value" id="routVal">36.0</span>
+      </div>
+      <div class="stat">
+        <span class="stat-label">fps</span>
+        <span class="stat-value" id="fps">—</span>
+      </div>
+    </div>
+
+    <!-- Nouveau panneau pour les contrôles de paramètres -->
+    <div class="panel controls-panel">
+      <div class="control-group">
+        <label for="incSlider">Inclinaison:</label>
+        <input type="range" id="incSlider" min="0" max="90" step="0.1" value="83.0">
+        <span id="incSliderVal">83.0°</span>
+      </div>
+      <div class="control-group">
+        <label for="routSlider">Rayon ext.:</label>
+        <input type="range" id="routSlider" min="10" max="60" step="0.1" value="36.0">
+        <span id="routSliderVal">36.0</span>
+      </div>
+      <div class="control-group">
+        <label for="rotSlider">Vitesse rot.:</label>
+        <input type="range" id="rotSlider" min="0.1" max="5.0" step="0.01" value="1.0">
+        <span id="rotSliderVal">1.00x</span>
+        <span id="rotVal" style="display:none;"></span> <!-- Garder pour compatibilité JS si besoin -->
+      </div>
+    </div>
+
+    <!-- Nouveau panneau pour les modes -->
+    <div class="panel mode-panel">
+      <button id="modeNormal" class="mode-btn active">NORMAL</button>
+      <button id="modeBloom" class="mode-btn">BLOOM</button>
+    </div>
+
+    <div id="mode-badge">▸ ANALYTIQUE — Luminet Eq.A3</div>
+  </div>
+
+  <script></script>
+</body>
+
+</html>
