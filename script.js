@@ -31,6 +31,7 @@
   uniform vec3 iCamVel;
   uniform float iFogStrength;
   uniform float iDiskSense;
+  uniform float iEmissionMode;
 
   #define PI 3.141592653589793
   #define BC 5.196152
@@ -51,12 +52,32 @@
     return 1.0 + sqrt(max(1.0 - aa * aa, 0.0));
   }
   float redshift(float r,float phi,float incl){ float v=1.0/sqrt(max(r-3.0,0.001)); return max((1.0+v*cos(phi)*sin(incl))/sqrt(max(1.0-3.0/r,0.001)),0.001); }
-  float emissivity(float r,float phi,float t,float rISCO){
+  float legacyEmissivity(float r,float phi,float t,float rISCO){
     if(r<rISCO || r>iRout) return 0.0;
     float base=(1.0-sqrt(rISCO/r))*pow(r,-3.0);
     float spin=fract(phi/(2.0*PI)+t*0.1*iSpeed);
     float flare=pow(sin(spin*20.0+r*0.5)*0.5+0.5,4.0)*0.3;
     return base*(1.0+flare);
+  }
+
+  float ntFlux(float r, float a, float rISCO){
+    if(r<rISCO || r>iRout) return 0.0;
+    float rr = max(r, rISCO + 1e-3);
+    float rin = max(rISCO, 1.0);
+    float edge = max(1.0 - sqrt(rin / rr), 0.0);
+    float radial = pow(rr, -3.0);
+    float spinBoost = 1.0 + 0.2 * a / max(pow(rr, 1.5), 1.0);
+    float outerTaper = 1.0 / (1.0 + pow(rr / max(iRout * 1.12, rin + 0.5), 4.0));
+    float flux = edge * radial * max(spinBoost, 0.15) * outerTaper;
+    float floorFlux = 3e-4 * pow(rin, -3.0);
+    return max(flux, floorFlux);
+  }
+
+  float emissivity(float r,float phi,float t,float rISCO){
+    if(iEmissionMode < 0.5) return legacyEmissivity(r, phi, t, rISCO);
+    float phiWarp = sin(phi * 2.0 + t * 0.25 * iSpeed) * 0.02;
+    float warpedR = max(r + phiWarp * r, rISCO + 1e-3);
+    return ntFlux(warpedR, iSpin, rISCO);
   }
   float dust(vec2 pos,float t){
     float r=pos.x; float phi=pos.y;
@@ -68,6 +89,28 @@
     return 0.55+0.28*s+0.17*c;
   }
   vec3 tempColor(float T){ T=clamp(T,0.0,1.0); vec3 c0=vec3(0.5,0.0,0.0), c1=vec3(1.0,0.2,0.0), c2=vec3(1.0,0.72,0.2), c3=vec3(1.0,0.98,0.9), c4=vec3(0.72,0.85,1.0); if(T<0.25) return mix(c0,c1,T/0.25); else if(T<0.55) return mix(c1,c2,(T-0.25)/0.30); else if(T<0.80) return mix(c2,c3,(T-0.55)/0.25); else return mix(c3,c4,(T-0.80)/0.20); }
+  vec3 blackbodyApprox(float tNorm){
+    float t = clamp(tNorm, 0.0, 1.35);
+    vec3 red = vec3(1.0, 0.34, 0.08);
+    vec3 amber = vec3(1.0, 0.69, 0.32);
+    vec3 warmWhite = vec3(1.0, 0.94, 0.82);
+    vec3 blueWhite = vec3(0.74, 0.85, 1.0);
+    if(t < 0.45) return mix(red, amber, t / 0.45);
+    if(t < 0.85) return mix(amber, warmWhite, (t - 0.45) / 0.40);
+    return mix(warmWhite, blueWhite, (t - 0.85) / 0.50);
+  }
+
+  vec3 diskColor(float flux, float z, float dustTerm, float rISCO){
+    if(iEmissionMode < 0.5){
+      float legacyTemp = clamp(0.5 + (1.0 / max(z, 0.1) - 1.0) * 1.2, 0.0, 1.0);
+      return tempColor(legacyTemp) * flux * dustTerm;
+    }
+    float refFlux = max(ntFlux(rISCO * 1.5, iSpin, rISCO), 1e-6);
+    float Tcol = pow(max(flux, 1e-8) / refFlux, 0.25);
+    float observedT = Tcol / max(z, 0.32);
+    vec3 bb = blackbodyApprox(observedT);
+    return bb * flux * dustTerm;
+  }
   vec3 aces(vec3 x){ const float a=2.51,b=0.03,c=2.43,d=0.59,e=0.14; return clamp((x*(a*x+b))/(x*(c*x+d)+e),0.0,1.0); }
   vec3 bloom(vec3 col,float intensity){ float l=dot(col,vec3(0.2126,0.7152,0.0722)); if(l>0.8) col+=vec3(0.4,0.3,0.2)*(l-0.8)*2.0*intensity; return col; }
 
@@ -266,15 +309,17 @@
       float alpha = atan(hit.z, hit.x);
 
       float z1=redshift(rHit,alpha,iIncl);
-      float flux1=emissivity(rHit,alpha,iTime,rISCO)*pow(1.0/z1,4.0);
-      flux1*=dust(vec2(rHit,alpha),iTime)*170.0;
-      vec3 c1=tempColor(clamp(0.5+(1.0/z1-1.0)*1.2,0.0,1.0))*flux1;
+      float F1=emissivity(rHit,alpha,iTime,rISCO);
+      float flux1=F1*pow(1.0/z1,4.0);
+      float dust1=dust(vec2(rHit,alpha),iTime)*mix(170.0, 220.0, iEmissionMode);
+      vec3 c1=diskColor(flux1, z1, dust1, rISCO);
 
       float rGhost = max(rISCO, rHit + 10.0 * exp(-abs(bMin - BC) * 1.7));
       float z2=redshift(rGhost,alpha+PI,iIncl);
-      float flux2=emissivity(rGhost,alpha+PI,iTime,rISCO)*pow(1.0/z2,4.0);
-      flux2*=dust(vec2(rGhost,alpha+PI),iTime)*40.0;
-      vec3 c2=tempColor(clamp(0.5+(1.0/z2-1.0)*1.2,0.0,1.0))*flux2*0.28;
+      float F2=emissivity(rGhost,alpha+PI,iTime,rISCO);
+      float flux2=F2*pow(1.0/z2,4.0);
+      float dust2=dust(vec2(rGhost,alpha+PI),iTime)*mix(40.0, 55.0, iEmissionMode);
+      vec3 c2=diskColor(flux2, z2, dust2, rISCO)*0.28;
 
       float thicknessFade = smoothstep(iDiskHalfThickness, 0.0, abs(hit.y));
       float dopplerAniso = 0.75 + 0.25 * clamp(dot(normalize(vec3(-hit.z,0.0,hit.x)), -hitDir), -1.0, 1.0);
@@ -336,6 +381,7 @@
   const uCamVel = gl.getUniformLocation(prog, 'iCamVel');
   const uFogStrength = gl.getUniformLocation(prog, 'iFogStrength');
   const uDiskSense = gl.getUniformLocation(prog, 'iDiskSense');
+  const uEmissionMode = gl.getUniformLocation(prog, 'iEmissionMode');
 
   const incVal = document.getElementById('incVal');
   const routVal = document.getElementById('routVal');
@@ -363,6 +409,8 @@
   const qualitySlider = document.getElementById('qualitySlider');
   const qualitySliderVal = document.getElementById('qualitySliderVal');
   const followOrbitToggle = document.getElementById('followOrbitToggle');
+  const emissionModeToggle = document.getElementById('emissionModeToggle');
+  const emissionModeVal = document.getElementById('emissionModeVal');
   const modeNormal = document.getElementById('modeNormal');
   const modeBloom = document.getElementById('modeBloom');
   const crosshair = document.getElementById('crosshair');
@@ -379,6 +427,7 @@
   let spin = 0.2;
   let diskPrograde = true;
   let quality = 0.72;
+  let ntEmissionMode = true;
   const fovX = 90.0;
   const fogStrength = 1.0;
 
@@ -410,6 +459,8 @@
     progradeVal.textContent = diskPrograde ? "prograde" : "retrograde";
     qualitySlider.value = quality.toFixed(2);
     qualitySliderVal.textContent = quality.toFixed(2);
+    emissionModeToggle.checked = ntEmissionMode;
+    emissionModeVal.textContent = ntEmissionMode ? "NT" : "stylized/legacy";
   }
 
   function setBloomMode(enabled) {
@@ -574,6 +625,11 @@
       followOrbit ? "geodesic" : "");
   });
 
+  emissionModeToggle.addEventListener('change', (e) => {
+    ntEmissionMode = e.target.checked;
+    updateReadouts();
+  });
+
   modeNormal.addEventListener('click', () => setBloomMode(false));
   modeBloom.addEventListener('click', () => setBloomMode(true));
 
@@ -659,6 +715,7 @@
     gl.uniform3f(uCamVel, basis.camVel[0], basis.camVel[1], basis.camVel[2]);
     gl.uniform1f(uFogStrength, fogStrength);
     gl.uniform1f(uDiskSense, diskPrograde ? 1.0 : 0.0);
+    gl.uniform1f(uEmissionMode, ntEmissionMode ? 1.0 : 0.0);
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
     requestAnimationFrame(render);
   }
