@@ -7,8 +7,8 @@
   --text-dim: #95a3bb;
   --text-soft: #738199;
   --accent: #8eb6ff;
-  --accent-2: #ffc58e;
-  --danger: #ff8f8f;
+  --accent-2: #ff4f6d;
+  --danger: #ff5f7e;
   --shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
   --radius-pill: 999px;
   --radius-panel: 18px;
@@ -29,8 +29,8 @@ body {
 
 body {
   background:
-    radial-gradient(120vw 90vh at 50% 115%, rgba(65, 89, 141, 0.08), transparent 65%),
-    radial-gradient(90vw 70vh at 50% -20%, rgba(36, 49, 78, 0.1), transparent 62%),
+    radial-gradient(120vw 90vh at 50% 115%, rgba(48, 86, 212, 0.16), transparent 65%),
+    radial-gradient(90vw 70vh at 50% -20%, rgba(178, 42, 76, 0.16), transparent 62%),
     var(--bg);
   font-family: "Inter", "Segoe UI", "Roboto", system-ui, sans-serif;
   overflow: hidden;
@@ -69,8 +69,8 @@ canvas {
   border: 1px solid var(--panel-border);
   border-radius: var(--radius-panel);
   padding: 10px 14px;
-  box-shadow: var(--shadow);
-  backdrop-filter: blur(10px) saturate(1.1);
+  box-shadow: var(--shadow), inset 0 1px 0 rgba(180, 198, 255, 0.08), inset 0 -1px 0 rgba(255, 88, 118, 0.07);
+  backdrop-filter: blur(10px) saturate(1.15);
   -webkit-backdrop-filter: blur(10px) saturate(1.1);
   pointer-events: auto;
 }
@@ -105,7 +105,7 @@ canvas {
   padding: 7px 12px;
   border-radius: var(--radius-pill);
   border: 1px solid var(--panel-border-strong);
-  background: rgba(16, 21, 32, 0.75);
+  background: linear-gradient(120deg, rgba(22, 34, 68, 0.74), rgba(56, 24, 52, 0.72));
   box-shadow: var(--shadow);
   text-shadow: 0 1px 0 rgba(0, 0, 0, 0.5);
 }
@@ -132,9 +132,9 @@ canvas {
 #lut-progress {
   width: 0%;
   height: 100%;
-  background: linear-gradient(90deg, var(--accent), #bfd4ff);
+  background: linear-gradient(90deg, #4f7cff, #9d53ff 58%, #ff4b5f);
   transition: width 120ms linear;
-  box-shadow: 0 0 12px rgba(142, 182, 255, 0.8);
+  box-shadow: 0 0 14px rgba(128, 102, 255, 0.75);
 }
 
 #crosshair {
@@ -243,7 +243,7 @@ canvas {
   height: 6px;
   border-radius: 999px;
   border: 1px solid rgba(174, 199, 255, 0.2);
-  background: linear-gradient(to right, rgba(145, 178, 242, 0.4), rgba(104, 124, 157, 0.16));
+  background: linear-gradient(to right, rgba(79, 124, 255, 0.5), rgba(159, 83, 255, 0.42), rgba(255, 75, 95, 0.28));
   outline: none;
   opacity: 0.92;
   transition: opacity 0.2s ease;
@@ -265,7 +265,7 @@ canvas {
   height: 13px;
   border-radius: 50%;
   border: 1px solid rgba(220, 232, 255, 0.9);
-  background: linear-gradient(145deg, #dce7ff, #a9c4ff);
+  background: linear-gradient(145deg, #d6deff, #8e66ff 58%, #ff5f70);
   box-shadow: 0 0 0 2px rgba(43, 64, 103, 0.45);
   cursor: pointer;
 }
@@ -275,7 +275,7 @@ canvas {
   height: 13px;
   border-radius: 50%;
   border: 1px solid rgba(220, 232, 255, 0.9);
-  background: linear-gradient(145deg, #dce7ff, #a9c4ff);
+  background: linear-gradient(145deg, #d6deff, #8e66ff 58%, #ff5f70);
   box-shadow: 0 0 0 2px rgba(43, 64, 103, 0.45);
   cursor: pointer;
 }
@@ -323,15 +323,15 @@ canvas {
 
 .mode-btn.active {
   color: #ffffff;
-  background: linear-gradient(135deg, rgba(81, 113, 171, 0.85), rgba(124, 155, 219, 0.8));
+  background: linear-gradient(135deg, rgba(57, 91, 196, 0.9), rgba(122, 71, 219, 0.9) 55%, rgba(218, 55, 82, 0.88));
   border-color: rgba(219, 232, 255, 0.9);
   box-shadow: 0 0 0 1px rgba(27, 41, 69, 0.5) inset;
 }
 
 a {
-  color: #b8d0ff;
+  color: #adc4ff;
   text-decoration: none;
-  border-bottom: 1px dotted rgba(184, 208, 255, 0.5);
+  border-bottom: 1px dotted rgba(173, 196, 255, 0.45);
 }
 
 a:hover {
