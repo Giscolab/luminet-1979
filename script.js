@@ -94,16 +94,16 @@
     float c=hash(vec2(floor(r*2.3),floor(angle*28.0)));
     return 0.55+0.28*s+0.17*c;
   }
-  vec3 tempColor(float T){ T=clamp(T,0.0,1.0); vec3 c0=vec3(0.5,0.0,0.0), c1=vec3(1.0,0.2,0.0), c2=vec3(1.0,0.72,0.2), c3=vec3(1.0,0.98,0.9), c4=vec3(0.72,0.85,1.0); if(T<0.25) return mix(c0,c1,T/0.25); else if(T<0.55) return mix(c1,c2,(T-0.25)/0.30); else if(T<0.80) return mix(c2,c3,(T-0.55)/0.25); else return mix(c3,c4,(T-0.80)/0.20); }
+  vec3 tempColor(float T){ T=clamp(T,0.0,1.0); vec3 c0=vec3(0.12,0.24,1.0), c1=vec3(0.28,0.42,1.0), c2=vec3(0.68,0.3,0.95), c3=vec3(0.95,0.18,0.54), c4=vec3(1.0,0.18,0.16); if(T<0.25) return mix(c0,c1,T/0.25); else if(T<0.55) return mix(c1,c2,(T-0.25)/0.30); else if(T<0.80) return mix(c2,c3,(T-0.55)/0.25); else return mix(c3,c4,(T-0.80)/0.20); }
   vec3 blackbodyApprox(float tNorm){
     float t = clamp(tNorm, 0.0, 1.35);
-    vec3 red = vec3(1.0, 0.34, 0.08);
-    vec3 amber = vec3(1.0, 0.69, 0.32);
-    vec3 warmWhite = vec3(1.0, 0.94, 0.82);
-    vec3 blueWhite = vec3(0.74, 0.85, 1.0);
-    if(t < 0.45) return mix(red, amber, t / 0.45);
-    if(t < 0.85) return mix(amber, warmWhite, (t - 0.45) / 0.40);
-    return mix(warmWhite, blueWhite, (t - 0.85) / 0.50);
+    vec3 blue = vec3(0.12, 0.28, 1.0);
+    vec3 cyanBlue = vec3(0.24, 0.66, 1.0);
+    vec3 violet = vec3(0.72, 0.26, 0.95);
+    vec3 red = vec3(1.0, 0.2, 0.22);
+    if(t < 0.45) return mix(blue, cyanBlue, t / 0.45);
+    if(t < 0.85) return mix(cyanBlue, violet, (t - 0.45) / 0.40);
+    return mix(violet, red, (t - 0.85) / 0.50);
   }
 
   vec3 diskColor(float flux, float z, float dustTerm, float rISCO){
@@ -348,7 +348,7 @@
     if (swallowed) {
       float photonRing = exp(-pow((bMin - BC) * 3.5, 2.0));
       bg = vec3(0.0);
-      bg += vec3(0.95, 0.66, 0.35) * photonRing * 0.45;
+      bg += vec3(0.82, 0.22, 0.24) * photonRing * 0.45;
       bg = applyDopplerTint(bg, dopplerFactor(rayDir, iCamVel));
       bg = tonemapGlobal(bg);
       fragColor = vec4(pow(bg, vec3(1.0 / 2.2)), 1.0);
@@ -359,17 +359,17 @@
       float edge=smoothstep(BC,BC-0.5,bMin);
       bg=mix(bg*0.03,vec3(0.0),edge);
       float glow=smoothstep(BC,BC-0.8,bMin)*0.3;
-      bg+=vec3(0.55,0.32,0.1)*glow*0.8;
+      bg+=vec3(0.72,0.18,0.28)*glow*0.8;
       bg = tonemapGlobal(bg);
       fragColor=vec4(pow(bg,vec3(1.0/2.2)),1.0); return;
     }
 
     vec3 col=bg;
-    col+=vec3(0.9,0.6,0.3)*exp(-pow((bMin-BC)*1.3,2.0))*0.08;
+    col+=vec3(0.74,0.2,0.3)*exp(-pow((bMin-BC)*1.3,2.0))*0.08;
 
     float fogTransmittance = exp(-fogOptical);
     col *= fogTransmittance;
-    col += vec3(1.05, 0.72, 0.45) * fogGlow * 0.11;
+    col += vec3(0.8, 0.24, 0.36) * fogGlow * 0.11;
 
     if(seenDisk) col += diskAccum;
 
