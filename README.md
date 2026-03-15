@@ -10,7 +10,17 @@ Application front-end (sans build npm) qui affiche en temps réel un disque d’
 - contrôles interactifs (inclinaison, rayon externe, vitesse, spin, lensing, qualité, exposition, etc.) ;
 - caméra orbitale ou manuelle ;
 - modes d’affichage `NORMAL` et `BLOOM` ;
-- émissivité disque `NT` (par défaut) ou `legacy stylized`.
+- émissivité disque `NT-like` (par défaut, approximation visuelle inspirée Novikov-Thorne) ou `legacy stylized`.
+
+
+## Mode visuel vs mode physique
+
+| Réglage UI | Catégorie | Ce que ça fait | Niveau de réalisme |
+|---|---|---|---|
+| `Émission: NT-like` | **Visuel inspiré physique** | Profil radial type disque mince avec correction simple du bord interne et modulation artistique légère. | **Intermédiaire** (pas un solveur Novikov-Thorne complet relativiste). |
+| `Émission: stylized/legacy` | **Visuel stylisé** | Palette/couleur et émissivité orientées rendu cinématique. | **Faible** (artistique). |
+| `Physics mode: effective` | **Physique de trajectoire (approx.)** | Intégration géodésique efficace pour le temps réel. | **Intermédiaire** (compromis stabilité/fps). |
+| `Physics mode: kerr_full` | **Physique de trajectoire (plus fidèle)** | Voie Kerr dédiée avec invariants `E/Lz/Q`. | **Plus élevé** (toujours visualisation temps réel, pas publication scientifique). |
 
 ## Nouveautés (mise à jour)
 
