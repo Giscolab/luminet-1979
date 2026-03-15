@@ -58,7 +58,37 @@
     float aa = clamp(a, -0.999, 0.999);
     return 1.0 + sqrt(max(1.0 - aa * aa, 0.0));
   }
-  float redshift(float r,float phi,float incl){ float v=1.0/sqrt(max(r-3.0,0.001)); return max((1.0+v*cos(phi)*sin(incl))/sqrt(max(1.0-3.0/r,0.001)),0.001); }
+  float redshiftSimple(float r,float phi,float incl){
+    float v = 1.0 / sqrt(max(r - 3.0, 0.001));
+    return max((1.0 + v * cos(phi) * sin(incl)) / sqrt(max(1.0 - 3.0 / r, 0.001)), 0.001);
+  }
+  float gFactor(float r, float phi, vec3 photonDir, bool useSimple){
+    if (useSimple) return 1.0 / max(redshiftSimple(r, phi, iIncl), 1e-4);
+
+    float rc = max(r, 1.02);
+    float sense = iDiskSense > 0.5 ? 1.0 : -1.0;
+    float a = clamp(iSpin, -0.999, 0.999);
+    float r32 = pow(rc, 1.5);
+    float omega = sense / max(r32 + sense * a, 0.12);
+    float vPhi = clamp(abs(omega) * rc, 0.0, 0.78);
+
+    vec3 ePhi = normalize(vec3(-sin(phi), 0.0, cos(phi))) * sense;
+    vec3 vSrc = ePhi * vPhi;
+    vec3 vObs = clamp(length(iCamVel), 0.0, 0.92) > 1e-4 ? iCamVel : vec3(0.0);
+    vec3 k = normalize(-photonDir);
+
+    float betaSrc2 = clamp(dot(vSrc, vSrc), 0.0, 0.92 * 0.92);
+    float betaObs2 = clamp(dot(vObs, vObs), 0.0, 0.92 * 0.92);
+    float gammaSrc = inversesqrt(max(1.0 - betaSrc2, 1e-4));
+    float gammaObs = inversesqrt(max(1.0 - betaObs2, 1e-4));
+
+    float kDotUSrc = gammaSrc * (1.0 - dot(vSrc, k));
+    float kDotUObs = gammaObs * (1.0 - dot(vObs, k));
+    float gKin = kDotUObs / max(kDotUSrc, 1e-4);
+
+    float grav = sqrt(max(1.0 - 2.0 / rc + (a * a) / (rc * rc), 1e-4));
+    return max(gKin * grav, 1e-3);
+  }
   float legacyEmissivity(float r,float phi,float t,float rISCO){
     if(r<rISCO || r>iRout) return 0.0;
     float base=(1.0-sqrt(rISCO/r))*pow(r,-3.0);
@@ -359,8 +389,9 @@
           vec3 crossDir = normalize(mix(prevDir, dir, t));
           float alpha = atan(crossPos.z, crossPos.x);
 
-          float z1 = redshift(rCross, alpha, iIncl);
-          float g1 = 1.0 / max(z1, 1e-4);
+          bool useSimpleG = (iPhysicsMode < 0.5 && traceQuality < 0.62);
+          float g1 = gFactor(rCross, alpha, crossDir, useSimpleG);
+          float z1 = 1.0 / max(g1, 1e-4);
           float Iem1 = emissivity(rCross, alpha, iTime, rISCO);
           float Iobs1 = pow(g1, 4.0) * Iem1;
           float dust1 = dust(vec2(rCross, alpha), iTime) * mix(170.0, 220.0, iEmissionMode);
@@ -368,8 +399,8 @@
 
           float ghostOffset = 10.0 * exp(-abs(bMin - BC) * 1.7);
           float rGhost = clamp(rCross + ghostOffset, rISCO, iRout * 0.95);
-          float z2 = redshift(rGhost, alpha + PI, iIncl);
-          float g2 = 1.0 / max(z2, 1e-4);
+          float g2 = gFactor(rGhost, alpha + PI, crossDir, useSimpleG);
+          float z2 = 1.0 / max(g2, 1e-4);
           float Iem2 = emissivity(rGhost, alpha + PI, iTime, rISCO);
           float Iobs2 = pow(g2, 4.0) * Iem2;
           float dust2 = dust(vec2(rGhost, alpha + PI), iTime) * mix(40.0, 55.0, iEmissionMode);
