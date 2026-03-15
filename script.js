@@ -38,6 +38,7 @@
   uniform float iLodMax;
   uniform float iCamSpeedFiltered;
   uniform float iExposure;
+  uniform float iPhysicsMode;
 
   #define PI 3.141592653589793
   #define BC 5.196152
@@ -169,7 +170,54 @@
     return acc;
   }
 
-  void rk4Step(inout vec3 pos, inout vec3 dir, float h, float L2){
+  vec3 kerrAccel(vec3 pos, vec3 dir){
+    float a = clamp(iSpin, -0.999, 0.999);
+    float r = max(length(pos), 1e-3);
+    float x = pos.x;
+    float y = pos.y;
+    float z = pos.z;
+    float theta = acos(clamp(y / r, -1.0, 1.0));
+    float sinT = max(sin(theta), 1e-4);
+    float cosT = cos(theta);
+    float phi = atan(z, x);
+
+    vec3 eR = vec3(sinT * cos(phi), cosT, sinT * sin(phi));
+    vec3 eTheta = vec3(cosT * cos(phi), -sinT, cosT * sin(phi));
+
+    float E = 1.0;
+    float Lz = z * dir.x - x * dir.z;
+    float pTheta = r * dot(dir, eTheta);
+    float Q = max(pTheta * pTheta + (cosT * cosT) * (Lz * Lz / max(sinT * sinT, 1e-4)), 0.0);
+
+    float Delta = max(r * r - 2.0 * r + a * a, 1e-4);
+    float Sigma = max(r * r + a * a * cosT * cosT, 1e-4);
+    float P = (r * r + a * a) * E - a * Lz;
+    float radialPot = max(P * P - Delta * (Q + (Lz - a * E) * (Lz - a * E)), 0.0);
+    float thetaPot = max(Q - (cosT * cosT) * (Lz * Lz / max(sinT * sinT, 1e-4) - a * a * E * E), 0.0);
+
+    float sgnR = sign(dot(dir, eR));
+    if (abs(sgnR) < 1e-3) sgnR = 1.0;
+    float sgnTheta = sign(dot(dir, eTheta));
+    if (abs(sgnTheta) < 1e-3) sgnTheta = 1.0;
+
+    float dr = sgnR * sqrt(radialPot) / Sigma;
+    float dTheta = sgnTheta * sqrt(thetaPot) / Sigma;
+    float dPhi = ((Lz / max(sinT * sinT, 1e-4)) - a * E + a * P / Delta) / Sigma;
+
+    vec3 targetDir = vec3(
+      dr * sinT * cos(phi) + r * cosT * cos(phi) * dTheta - r * sinT * sin(phi) * dPhi,
+      dr * cosT - r * sinT * dTheta,
+      dr * sinT * sin(phi) + r * cosT * sin(phi) * dTheta + r * sinT * cos(phi) * dPhi
+    );
+
+    float blend = smoothstep(2.0, 7.0, r);
+    vec3 fallback = normalize(dir + geoAccel(pos, dir, dot(cross(pos, dir), cross(pos, dir))) * 0.05);
+    vec3 kerrDir = normalize(targetDir);
+    vec3 mixed = normalize(mix(kerrDir, fallback, blend * 0.35));
+    return (mixed - dir) * (1.6 + 0.7 * iBend);
+  }
+
+  void rk4StepEffective(inout vec3 pos, inout vec3 dir, float h, float L2){
     vec3 k1p = dir;
     vec3 k1v = geoAccel(pos, dir, L2);
 
@@ -187,6 +235,29 @@
     vec3 v4 = normalize(dir + h * k3v);
     vec3 k4p = v4;
     vec3 k4v = geoAccel(p4, v4, L2);
+
+    pos += h * (k1p + 2.0*k2p + 2.0*k3p + k4p) / 6.0;
+    dir = normalize(dir + h * (k1v + 2.0*k2v + 2.0*k3v + k4v) / 6.0);
+  }
+
+  void rk4StepKerr(inout vec3 pos, inout vec3 dir, float h){
+    vec3 k1p = dir;
+    vec3 k1v = kerrAccel(pos, dir);
+
+    vec3 p2 = pos + 0.5 * h * k1p;
+    vec3 v2 = normalize(dir + 0.5 * h * k1v);
+    vec3 k2p = v2;
+    vec3 k2v = kerrAccel(p2, v2);
+
+    vec3 p3 = pos + 0.5 * h * k2p;
+    vec3 v3 = normalize(dir + 0.5 * h * k2v);
+    vec3 k3p = v3;
+    vec3 k3v = kerrAccel(p3, v3);
+
+    vec3 p4 = pos + h * k3p;
+    vec3 v4 = normalize(dir + h * k3v);
+    vec3 k4p = v4;
+    vec3 k4v = kerrAccel(p4, v4);
 
     pos += h * (k1p + 2.0*k2p + 2.0*k3p + k4p) / 6.0;
     dir = normalize(dir + h * (k1v + 2.0*k2v + 2.0*k3v + k4v) / 6.0);
@@ -239,7 +310,8 @@
       bMin = min(bMin, length(cross(pos, dir)));
       float rH = horizonRadius(iSpin);
       float asymH = rH * (1.0 - 0.12 * iSpin * clamp(pos.x / max(r, 1e-3), -1.0, 1.0));
-      if (r < clamp(asymH, max(0.8 * rH, 1.05), 2.45)) {
+      float horizonClamp = clamp(asymH, max(0.82 * rH, 1.01), 2.65);
+      if (r < horizonClamp) {
         swallowed = true;
         return false;
       }
@@ -251,6 +323,11 @@
       float stepFar = mix(0.45, 1.4, clamp((r - 8.0) / 55.0, 0.0, 1.0));
       float h = stepFar / mix(1.65, 0.68, traceQuality);
       h *= mix(1.0, 0.72, clamp(10.0 / max(r, 0.1), 0.0, 1.0));
+      float hMin = mix(0.01, 0.035, 1.0 - traceQuality);
+      if (iPhysicsMode > 0.5) hMin *= 0.6;
+      float horizonBlend = smoothstep(rH + 0.35, rH + 2.5, r);
+      h *= mix(0.35, 1.0, horizonBlend);
+      h = clamp(h, hMin, 1.8);
 
       float diskBand = exp(-abs(pos.y) / max(iDiskHalfThickness * 1.8, 0.05));
       float rXZ = length(pos.xz);
@@ -264,7 +341,15 @@
 
       vec3 prevPos = pos;
       vec3 prevDir = dir;
-      rk4Step(pos, dir, h, L2);
+      if (iPhysicsMode > 0.5) {
+        rk4StepKerr(pos, dir, h);
+      } else {
+        rk4StepEffective(pos, dir, h, L2);
+      }
+      if (any(greaterThan(abs(pos), vec3(1e4))) || any(greaterThan(abs(dir), vec3(1e4))) || length(pos) > SKY_RADIUS * 1.4) {
+        skyDir = normalize(prevPos);
+        return crossings > 0;
+      }
 
       if (sign(prevY) != sign(pos.y)) {
         float t = prevY / (prevY - pos.y);
@@ -433,6 +518,7 @@
   const uLodMax = gl.getUniformLocation(prog, 'iLodMax');
   const uCamSpeedFiltered = gl.getUniformLocation(prog, 'iCamSpeedFiltered');
   const uExposure = gl.getUniformLocation(prog, 'iExposure');
+  const uPhysicsMode = gl.getUniformLocation(prog, 'iPhysicsMode');
 
   const incVal = document.getElementById('incVal');
   const routVal = document.getElementById('routVal');
@@ -455,6 +541,8 @@
   const bendSliderVal = document.getElementById('bendSliderVal');
   const spinSlider = document.getElementById('spinSlider');
   const spinSliderVal = document.getElementById('spinSliderVal');
+  const physicsModeToggle = document.getElementById('physicsModeToggle');
+  const physicsModeVal = document.getElementById('physicsModeVal');
   const progradeToggle = document.getElementById('progradeToggle');
   const progradeVal = document.getElementById('progradeVal');
   const qualitySlider = document.getElementById('qualitySlider');
@@ -490,6 +578,7 @@
     diskHalfThickness: 0.9,
     bend: 1.0,
     spin: 0.2,
+    physicsMode: 'effective',
     diskPrograde: true,
     quality: 0.72,
     autoLodEnabled: true,
@@ -511,6 +600,7 @@
   let diskHalfThickness = DEFAULTS.diskHalfThickness;
   let bend = DEFAULTS.bend;
   let spin = DEFAULTS.spin;
+  let physicsMode = DEFAULTS.physicsMode;
   let diskPrograde = DEFAULTS.diskPrograde;
   let quality = DEFAULTS.quality;
   let autoLodEnabled = DEFAULTS.autoLodEnabled;
@@ -538,6 +628,7 @@
       diskHalfThickness,
       bend,
       spin,
+      physicsMode,
       diskPrograde,
       quality,
       autoLodEnabled,
@@ -574,6 +665,7 @@
     if (Number.isFinite(patch.diskHalfThickness)) diskHalfThickness = clamp(patch.diskHalfThickness, 0.05, 3.5);
     if (Number.isFinite(patch.bend)) bend = clamp(patch.bend, 0.2, 2.0);
     if (Number.isFinite(patch.spin)) spin = clamp(patch.spin, -0.99, 0.99);
+    if (typeof patch.physicsMode === 'string') physicsMode = patch.physicsMode === 'kerr_full' ? 'kerr_full' : 'effective';
     if (typeof patch.diskPrograde === 'boolean') diskPrograde = patch.diskPrograde;
     if (Number.isFinite(patch.quality)) quality = clamp(patch.quality, 0.25, 1.0);
     if (typeof patch.autoLodEnabled === 'boolean') autoLodEnabled = patch.autoLodEnabled;
@@ -629,6 +721,8 @@
     bendSliderVal.textContent = `${bend.toFixed(2)}x`;
     spinSlider.value = spin.toFixed(2);
     spinSliderVal.textContent = spin.toFixed(2);
+    physicsModeToggle.checked = physicsMode === 'kerr_full';
+    physicsModeVal.textContent = physicsMode;
     progradeToggle.checked = diskPrograde;
     progradeVal.textContent = diskPrograde ? "prograde" : "retrograde";
     qualitySlider.value = quality.toFixed(2);
@@ -800,6 +894,12 @@
 
   spinSlider.addEventListener('input', (e) => {
     spin = parseFloat(e.target.value);
+    updateReadouts();
+    scheduleSave();
+  });
+
+  physicsModeToggle.addEventListener('change', (e) => {
+    physicsMode = e.target.checked ? 'kerr_full' : 'effective';
     updateReadouts();
     scheduleSave();
   });
@@ -980,6 +1080,7 @@
     gl.uniform1f(uLodMax, lodMax);
     gl.uniform1f(uCamSpeedFiltered, filteredCamSpeed);
     gl.uniform1f(uExposure, exposure);
+    gl.uniform1f(uPhysicsMode, physicsMode === 'kerr_full' ? 1.0 : 0.0);
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
     requestAnimationFrame(render);
   }
