@@ -18,24 +18,9 @@
 
   <div class="hint">
     <kbd>A</kbd> · <kbd>G</kbd> · <kbd>L</kbd> modes &nbsp;&nbsp; | &nbsp;&nbsp; souris / tactile : inclinaison / rayon externe
-  </div>
+  </div>  <div id="mode-badge">▸ GÉODÉSIQUE RK4 — Schwarzschild/Kerr-lite</div>
 
-  <div class="overlay">
-    <div class="panel">
-      <div class="stat">
-        <span class="stat-label">inclinaison</span>
-        <span class="stat-value" id="incVal">83.0°</span>
-      </div>
-      <div class="stat">
-        <span class="stat-label">rayon ext.</span>
-        <span class="stat-value" id="routVal">36.0</span>
-      </div>
-      <div class="stat">
-        <span class="stat-label">fps</span>
-        <span class="stat-value" id="fps">—</span>
-      </div>
-    </div>
-
+  <div class="left-controls-container">
     <!-- Nouveau panneau pour les contrôles de paramètres -->
     <div class="panel controls-panel">
       <div class="control-group">
@@ -141,8 +126,23 @@
       <button id="modeNormal" class="mode-btn active">NORMAL</button>
       <button id="modeBloom" class="mode-btn">BLOOM</button>
     </div>
+  </div>
 
-    <div id="mode-badge">▸ GÉODÉSIQUE RK4 — Schwarzschild/Kerr-lite</div>
+  <div class="overlay">
+    <div class="panel">
+      <div class="stat">
+        <span class="stat-label">inclinaison</span>
+        <span class="stat-value" id="incVal">83.0°</span>
+      </div>
+      <div class="stat">
+        <span class="stat-label">rayon ext.</span>
+        <span class="stat-value" id="routVal">36.0</span>
+      </div>
+      <div class="stat">
+        <span class="stat-label">fps</span>
+        <span class="stat-value" id="fps">—</span>
+      </div>
+    </div>
   </div>
 
   <script src="script.js"></script>
