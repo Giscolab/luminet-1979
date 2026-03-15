@@ -1125,6 +1125,7 @@
     yawSlider.disabled = followOrbit;
     pitchSlider.disabled = followOrbit;
     distSlider.disabled = followOrbit;
+    updateReadouts();
     refreshModeBadge();
     scheduleSave();
   });
