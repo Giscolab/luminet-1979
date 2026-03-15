@@ -156,6 +156,15 @@ canvas {
   border-color: rgba(229, 171, 255, 0.55);
 }
 
+#mode-badge.orbit-cinematic {
+  box-shadow: var(--shadow), 0 0 0 1px rgba(142, 182, 255, 0.28) inset;
+}
+
+#mode-badge.orbit-physical {
+  border-color: rgba(255, 188, 122, 0.75);
+  box-shadow: var(--shadow), 0 0 0 1px rgba(255, 188, 122, 0.36) inset;
+}
+
 .progress-container {
   position: fixed;
   top: 0;

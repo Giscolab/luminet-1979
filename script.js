@@ -589,6 +589,8 @@
   const exposureSlider = document.getElementById('exposureSlider');
   const exposureVal = document.getElementById('exposureVal');
   const followOrbitToggle = document.getElementById('followOrbitToggle');
+  const orbitTrajectoryToggle = document.getElementById('orbitTrajectoryToggle');
+  const orbitTrajectoryVal = document.getElementById('orbitTrajectoryVal');
   const emissionModeToggle = document.getElementById('emissionModeToggle');
   const emissionModeVal = document.getElementById('emissionModeVal');
   const modeNormal = document.getElementById('modeNormal');
@@ -619,6 +621,7 @@
     exposure: 1.0,
     ntEmissionMode: true,
     followOrbit: true,
+    cameraTrajectoryMode: 'cinematic',
   };
 
   let incl = DEFAULTS.inclDeg * Math.PI / 180;
@@ -641,6 +644,7 @@
   let maxDiskCrossings = DEFAULTS.maxDiskCrossings;
   let exposure = DEFAULTS.exposure;
   let ntEmissionMode = DEFAULTS.ntEmissionMode;
+  let cameraTrajectoryMode = DEFAULTS.cameraTrajectoryMode;
   const fovX = 90.0;
   const fogStrength = 1.0;
 
@@ -669,6 +673,7 @@
       exposure,
       ntEmissionMode,
       followOrbit,
+      cameraTrajectoryMode,
     };
   }
 
@@ -708,6 +713,9 @@
     if (Number.isFinite(patch.exposure)) exposure = clamp(patch.exposure, 0.30, 2.50);
     if (typeof patch.ntEmissionMode === 'boolean') ntEmissionMode = patch.ntEmissionMode;
     if (typeof patch.followOrbit === 'boolean') followOrbit = patch.followOrbit;
+    if (typeof patch.cameraTrajectoryMode === 'string') {
+      cameraTrajectoryMode = patch.cameraTrajectoryMode === 'physical' ? 'physical' : 'cinematic';
+    }
   }
 
   function loadSavedState() {
@@ -723,10 +731,12 @@
   function resetToDefaults() {
     applyState(DEFAULTS);
     filteredCamSpeed = 0.0;
+    if (cameraTrajectoryMode === 'physical') resetPhysicalOrbitState();
     setBloomMode(bloomMode > 0.5);
     followOrbitToggle.checked = followOrbit;
     followOrbitToggle.dispatchEvent(new Event('change'));
     updateReadouts();
+    refreshModeBadge();
     scheduleSave();
   }
 
@@ -770,6 +780,9 @@
     exposureVal.textContent = `${exposure.toFixed(2)}x`;
     emissionModeToggle.checked = ntEmissionMode;
     emissionModeVal.textContent = ntEmissionMode ? "NT-like" : "stylized/legacy";
+    orbitTrajectoryToggle.checked = cameraTrajectoryMode === 'physical';
+    orbitTrajectoryToggle.disabled = !followOrbit;
+    orbitTrajectoryVal.textContent = cameraTrajectoryMode === 'physical' ? 'physique' : 'cinématique';
   }
 
   function setBloomMode(enabled) {
@@ -779,9 +792,22 @@
     scheduleSave();
   }
 
+  let modeBadgeLabel = '▸ GÉODÉSIQUE RK4 — Schwarzschild/Kerr-lite';
+
   function setModeBadge(text, cssClass = '') {
     modeBadge.textContent = text;
     modeBadge.className = cssClass;
+  }
+
+  function refreshModeBadge() {
+    const trajectoryLabel = !followOrbit
+      ? 'caméra manuelle'
+      : (cameraTrajectoryMode === 'physical' ? 'caméra orbite physique' : 'caméra orbite cinématique');
+    const badgeClass = [
+      'geodesic',
+      followOrbit && cameraTrajectoryMode === 'physical' ? 'orbit-physical' : 'orbit-cinematic',
+    ].filter(Boolean).join(' ');
+    setModeBadge(`${modeBadgeLabel} • ${trajectoryLabel}`, badgeClass);
   }
 
   function clamp(v, min, max) {
@@ -801,7 +827,7 @@
     ];
   }
 
-  function getSkimmingOrbitBasis(t) {
+  function getSkimmingOrbitBasisCinematic(t) {
     const semiMajor = 12.0;
     const eccentricity = 0.68;
     const p = semiMajor * (1.0 - eccentricity * eccentricity);
@@ -847,6 +873,121 @@
     const up = normalize(cross(right, forward));
 
     return { camPos, right, up, forward, camVel };
+  }
+
+  const physicalOrbitState = {
+    time: 0,
+    pos: [12.0 * (1.0 - 0.68), 0.0, 0.0],
+    vel: [0.0, 0.0, 0.0],
+    initialized: false,
+  };
+
+  function resetPhysicalOrbitState() {
+    const semiMajor = 12.0;
+    const eccentricity = 0.68;
+    const periapsis = semiMajor * (1.0 - eccentricity);
+    const mu = Math.max(0.35, bend);
+    const vPeri = Math.sqrt(mu * (1.0 + eccentricity) / Math.max(semiMajor * (1.0 - eccentricity), 1e-3));
+    physicalOrbitState.time = 0;
+    physicalOrbitState.pos = [periapsis, 0.0, 0.0];
+    physicalOrbitState.vel = [0.0, 0.0, vPeri];
+    physicalOrbitState.initialized = true;
+  }
+
+  function orbitAcceleration(pos, vel) {
+    const r2 = Math.max(pos[0] * pos[0] + pos[2] * pos[2], 1e-4);
+    const r = Math.sqrt(r2);
+    const mu = Math.max(0.35, bend);
+    const invR3 = 1.0 / (r2 * r);
+    const axN = -mu * pos[0] * invR3;
+    const azN = -mu * pos[2] * invR3;
+
+    const Lz = pos[0] * vel[2] - pos[2] * vel[0];
+    const pnStrength = physicsMode === 'kerr_full' ? 4.8 : 2.8;
+    const pn = -pnStrength * (Lz * Lz) / Math.max(Math.pow(r, 5.0), 1e-4);
+    const axPN = pn * pos[0];
+    const azPN = pn * pos[2];
+
+    const spinDrag = (physicsMode === 'kerr_full' ? 0.52 : 0.35) * spin / Math.max(r2, 1e-3);
+    const axSpin = -spinDrag * vel[2];
+    const azSpin = spinDrag * vel[0];
+
+    return [axN + axPN + axSpin, azN + azPN + azSpin];
+  }
+
+  function integratePhysicalOrbitStep(pos, vel, h) {
+    const [k1ax, k1az] = orbitAcceleration(pos, vel);
+    const k1px = vel[0];
+    const k1pz = vel[2];
+
+    const p2 = [pos[0] + 0.5 * h * k1px, 0.0, pos[2] + 0.5 * h * k1pz];
+    const v2 = [vel[0] + 0.5 * h * k1ax, 0.0, vel[2] + 0.5 * h * k1az];
+    const [k2ax, k2az] = orbitAcceleration(p2, v2);
+    const k2px = v2[0];
+    const k2pz = v2[2];
+
+    const p3 = [pos[0] + 0.5 * h * k2px, 0.0, pos[2] + 0.5 * h * k2pz];
+    const v3 = [vel[0] + 0.5 * h * k2ax, 0.0, vel[2] + 0.5 * h * k2az];
+    const [k3ax, k3az] = orbitAcceleration(p3, v3);
+    const k3px = v3[0];
+    const k3pz = v3[2];
+
+    const p4 = [pos[0] + h * k3px, 0.0, pos[2] + h * k3pz];
+    const v4 = [vel[0] + h * k3ax, 0.0, vel[2] + h * k3az];
+    const [k4ax, k4az] = orbitAcceleration(p4, v4);
+    const k4px = v4[0];
+    const k4pz = v4[2];
+
+    pos[0] += (h / 6.0) * (k1px + 2.0 * k2px + 2.0 * k3px + k4px);
+    pos[2] += (h / 6.0) * (k1pz + 2.0 * k2pz + 2.0 * k3pz + k4pz);
+    vel[0] += (h / 6.0) * (k1ax + 2.0 * k2ax + 2.0 * k3ax + k4ax);
+    vel[2] += (h / 6.0) * (k1az + 2.0 * k2az + 2.0 * k3az + k4az);
+  }
+
+  function getSkimmingOrbitBasisPhysical(t) {
+    if (!physicalOrbitState.initialized || t < physicalOrbitState.time) {
+      resetPhysicalOrbitState();
+    }
+    const maxStep = 1.0 / 180.0;
+    let steps = 0;
+    while (physicalOrbitState.time < t && steps < 240) {
+      const h = Math.min(maxStep, t - physicalOrbitState.time);
+      integratePhysicalOrbitStep(physicalOrbitState.pos, physicalOrbitState.vel, h);
+      physicalOrbitState.time += h;
+      steps++;
+    }
+
+    const x = physicalOrbitState.pos[0];
+    const z = physicalOrbitState.pos[2];
+    const vx = physicalOrbitState.vel[0];
+    const vz = physicalOrbitState.vel[2];
+    const orbitalAngle = Math.atan2(z, x);
+    const r = Math.max(Math.hypot(x, z), 1e-3);
+    const angularSpeed = (x * vz - z * vx) / Math.max(r * r, 1e-4);
+    const skimHeight = 0.25 * Math.sin(orbitalAngle * 0.5);
+    const vy = 0.25 * 0.5 * Math.cos(orbitalAngle * 0.5) * angularSpeed;
+
+    const tangent = normalize([vx, 0.0, vz]);
+    const velLen = Math.hypot(vx, vy, vz) || 1e-6;
+    const betaKepler = Math.min(Math.sqrt(Math.max(bend, 0.35) / Math.max(r, 3.0)), 0.85);
+    const camVel = [
+      vx / velLen * betaKepler,
+      vy / velLen * betaKepler,
+      vz / velLen * betaKepler,
+    ];
+
+    const worldUp = [0, 1, 0];
+    let right = cross(tangent, worldUp);
+    if (Math.hypot(right[0], right[1], right[2]) < 1e-4) right = [1, 0, 0];
+    right = normalize(right);
+    const up = normalize(cross(right, tangent));
+    return { camPos: [x, skimHeight, z], right, up, forward: tangent, camVel };
+  }
+
+  function getSkimmingOrbitBasis(t) {
+    return cameraTrajectoryMode === 'physical'
+      ? getSkimmingOrbitBasisPhysical(t)
+      : getSkimmingOrbitBasisCinematic(t);
   }
 
   function getManualCameraBasis() {
@@ -984,10 +1125,15 @@
     yawSlider.disabled = followOrbit;
     pitchSlider.disabled = followOrbit;
     distSlider.disabled = followOrbit;
-    setModeBadge(followOrbit
-      ? "▸ CAMÉRA ORBITALE — géodésique excentrique (style Interstellar)"
-      : "▸ CAMÉRA MANUELLE — Schwarzschild/Kerr-lite",
-      followOrbit ? "geodesic" : "");
+    refreshModeBadge();
+    scheduleSave();
+  });
+
+  orbitTrajectoryToggle.addEventListener('change', (e) => {
+    cameraTrajectoryMode = e.target.checked ? 'physical' : 'cinematic';
+    if (cameraTrajectoryMode === 'physical') resetPhysicalOrbitState();
+    updateReadouts();
+    refreshModeBadge();
     scheduleSave();
   });
 
@@ -1002,10 +1148,11 @@
 
   document.addEventListener('keydown', (e) => {
     const key = e.key.toLowerCase();
-    if (key === 'a') setModeBadge('▸ ANALYTIQUE — Luminet Eq.A3');
-    if (key === 'g') setModeBadge('▸ GÉODÉSIQUE RK4 — Schwarzschild/Kerr-lite', 'geodesic');
-    if (key === 'l') setModeBadge('▸ LUT — mode expérimental', 'lut');
+    if (key === 'a') modeBadgeLabel = '▸ ANALYTIQUE — Luminet Eq.A3';
+    if (key === 'g') modeBadgeLabel = '▸ GÉODÉSIQUE RK4 — Schwarzschild/Kerr-lite';
+    if (key === 'l') modeBadgeLabel = '▸ LUT — mode expérimental';
     if (key === 'r') resetToDefaults();
+    if (key === 'a' || key === 'g' || key === 'l') refreshModeBadge();
   });
 
   let dragging = false;
@@ -1049,10 +1196,12 @@
   window.addEventListener('resize', resize);
   resize();
   loadSavedState();
+  if (cameraTrajectoryMode === 'physical') resetPhysicalOrbitState();
   updateReadouts();
   setBloomMode(bloomMode > 0.5);
   followOrbitToggle.checked = followOrbit;
   followOrbitToggle.dispatchEvent(new Event('change'));
+  refreshModeBadge();
 
   let frames = 0;
   let fpsTimer = 0;
