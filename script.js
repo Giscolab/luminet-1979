@@ -769,7 +769,7 @@
     exposureSlider.value = exposure.toFixed(2);
     exposureVal.textContent = `${exposure.toFixed(2)}x`;
     emissionModeToggle.checked = ntEmissionMode;
-    emissionModeVal.textContent = ntEmissionMode ? "NT" : "stylized/legacy";
+    emissionModeVal.textContent = ntEmissionMode ? "NT-like" : "stylized/legacy";
   }
 
   function setBloomMode(enabled) {
