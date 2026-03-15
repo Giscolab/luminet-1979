@@ -476,29 +476,136 @@
   const modeBloom = document.getElementById('modeBloom');
   const crosshair = document.getElementById('crosshair');
 
-  let incl = 83 * Math.PI / 180;
-  let rout = 36.0;
-  let speed = 1.0;
-  let bloomMode = 0;
-  let camYaw = 0.0;
-  let camPitch = 22.0;
-  let camDist = 38.0;
-  let diskHalfThickness = 0.9;
-  let bend = 1.0;
-  let spin = 0.2;
-  let diskPrograde = true;
-  let quality = 0.72;
-  let autoLodEnabled = true;
-  let lodMin = 0.40;
-  let lodMax = 0.90;
+  const STORAGE_KEY = 'luminet1979.viewer.v1';
+  const SAVE_DEBOUNCE_MS = 180;
+
+  const DEFAULTS = {
+    inclDeg: 83.0,
+    rout: 36.0,
+    speed: 1.0,
+    bloomMode: 0,
+    camYaw: 0.0,
+    camPitch: 22.0,
+    camDist: 38.0,
+    diskHalfThickness: 0.9,
+    bend: 1.0,
+    spin: 0.2,
+    diskPrograde: true,
+    quality: 0.72,
+    autoLodEnabled: true,
+    lodMin: 0.40,
+    lodMax: 0.90,
+    maxDiskCrossings: 4,
+    exposure: 1.0,
+    ntEmissionMode: true,
+    followOrbit: true,
+  };
+
+  let incl = DEFAULTS.inclDeg * Math.PI / 180;
+  let rout = DEFAULTS.rout;
+  let speed = DEFAULTS.speed;
+  let bloomMode = DEFAULTS.bloomMode;
+  let camYaw = DEFAULTS.camYaw;
+  let camPitch = DEFAULTS.camPitch;
+  let camDist = DEFAULTS.camDist;
+  let diskHalfThickness = DEFAULTS.diskHalfThickness;
+  let bend = DEFAULTS.bend;
+  let spin = DEFAULTS.spin;
+  let diskPrograde = DEFAULTS.diskPrograde;
+  let quality = DEFAULTS.quality;
+  let autoLodEnabled = DEFAULTS.autoLodEnabled;
+  let lodMin = DEFAULTS.lodMin;
+  let lodMax = DEFAULTS.lodMax;
   let filteredCamSpeed = 0.0;
-  let maxDiskCrossings = 4;
-  let exposure = 1.0;
-  let ntEmissionMode = true;
+  let maxDiskCrossings = DEFAULTS.maxDiskCrossings;
+  let exposure = DEFAULTS.exposure;
+  let ntEmissionMode = DEFAULTS.ntEmissionMode;
   const fovX = 90.0;
   const fogStrength = 1.0;
 
-  let followOrbit = true;
+  let followOrbit = DEFAULTS.followOrbit;
+  let saveTimer = null;
+
+  function serializeState() {
+    return {
+      inclDeg: incl * 180 / Math.PI,
+      rout,
+      speed,
+      bloomMode,
+      camYaw,
+      camPitch,
+      camDist,
+      diskHalfThickness,
+      bend,
+      spin,
+      diskPrograde,
+      quality,
+      autoLodEnabled,
+      lodMin,
+      lodMax,
+      maxDiskCrossings,
+      exposure,
+      ntEmissionMode,
+      followOrbit,
+    };
+  }
+
+  function scheduleSave() {
+    if (saveTimer) window.clearTimeout(saveTimer);
+    saveTimer = window.setTimeout(() => {
+      saveTimer = null;
+      try {
+        window.localStorage.setItem(STORAGE_KEY, JSON.stringify(serializeState()));
+      } catch (_) {
+        // Ignore storage failures (private mode, quota, etc.)
+      }
+    }, SAVE_DEBOUNCE_MS);
+  }
+
+  function applyState(patch) {
+    if (!patch || typeof patch !== 'object') return;
+    if (Number.isFinite(patch.inclDeg)) incl = clamp(patch.inclDeg, 0.0, 90.0) * Math.PI / 180;
+    if (Number.isFinite(patch.rout)) rout = clamp(patch.rout, 10.0, 60.0);
+    if (Number.isFinite(patch.speed)) speed = clamp(patch.speed, 0.1, 5.0);
+    if (Number.isFinite(patch.bloomMode)) bloomMode = patch.bloomMode >= 0.5 ? 1 : 0;
+    if (Number.isFinite(patch.camYaw)) camYaw = clamp(patch.camYaw, -180.0, 180.0);
+    if (Number.isFinite(patch.camPitch)) camPitch = clamp(patch.camPitch, -75.0, 75.0);
+    if (Number.isFinite(patch.camDist)) camDist = clamp(patch.camDist, 12.0, 80.0);
+    if (Number.isFinite(patch.diskHalfThickness)) diskHalfThickness = clamp(patch.diskHalfThickness, 0.05, 3.5);
+    if (Number.isFinite(patch.bend)) bend = clamp(patch.bend, 0.2, 2.0);
+    if (Number.isFinite(patch.spin)) spin = clamp(patch.spin, -0.99, 0.99);
+    if (typeof patch.diskPrograde === 'boolean') diskPrograde = patch.diskPrograde;
+    if (Number.isFinite(patch.quality)) quality = clamp(patch.quality, 0.25, 1.0);
+    if (typeof patch.autoLodEnabled === 'boolean') autoLodEnabled = patch.autoLodEnabled;
+    if (Number.isFinite(patch.lodMin)) lodMin = clamp(patch.lodMin, 0.25, 1.0);
+    if (Number.isFinite(patch.lodMax)) lodMax = clamp(patch.lodMax, 0.25, 1.0);
+    if (lodMin > lodMax - 0.01) lodMax = clamp(lodMin + 0.01, 0.25, 1.0);
+    if (lodMax < lodMin + 0.01) lodMin = clamp(lodMax - 0.01, 0.25, 1.0);
+    if (Number.isFinite(patch.maxDiskCrossings)) maxDiskCrossings = Math.round(clamp(patch.maxDiskCrossings, 1, 5));
+    if (Number.isFinite(patch.exposure)) exposure = clamp(patch.exposure, 0.30, 2.50);
+    if (typeof patch.ntEmissionMode === 'boolean') ntEmissionMode = patch.ntEmissionMode;
+    if (typeof patch.followOrbit === 'boolean') followOrbit = patch.followOrbit;
+  }
+
+  function loadSavedState() {
+    try {
+      const raw = window.localStorage.getItem(STORAGE_KEY);
+      if (!raw) return;
+      applyState(JSON.parse(raw));
+    } catch (_) {
+      // Ignore malformed state.
+    }
+  }
+
+  function resetToDefaults() {
+    applyState(DEFAULTS);
+    filteredCamSpeed = 0.0;
+    setBloomMode(bloomMode > 0.5);
+    followOrbitToggle.checked = followOrbit;
+    followOrbitToggle.dispatchEvent(new Event('change'));
+    updateReadouts();
+    scheduleSave();
+  }
 
   function updateReadouts() {
     const inclDeg = (incl * 180 / Math.PI).toFixed(1);
@@ -544,6 +651,7 @@
     bloomMode = enabled ? 1 : 0;
     modeNormal.classList.toggle('active', !enabled);
     modeBloom.classList.toggle('active', enabled);
+    scheduleSave();
   }
 
   function setModeBadge(text, cssClass = '') {
@@ -645,83 +753,99 @@
   incSlider.addEventListener('input', (e) => {
     incl = parseFloat(e.target.value) * Math.PI / 180;
     updateReadouts();
+    scheduleSave();
   });
 
   routSlider.addEventListener('input', (e) => {
     rout = parseFloat(e.target.value);
     updateReadouts();
+    scheduleSave();
   });
 
   rotSlider.addEventListener('input', (e) => {
     speed = parseFloat(e.target.value);
     updateReadouts();
+    scheduleSave();
   });
 
   yawSlider.addEventListener('input', (e) => {
     camYaw = parseFloat(e.target.value);
     updateReadouts();
+    scheduleSave();
   });
 
   pitchSlider.addEventListener('input', (e) => {
     camPitch = parseFloat(e.target.value);
     updateReadouts();
+    scheduleSave();
   });
 
   distSlider.addEventListener('input', (e) => {
     camDist = parseFloat(e.target.value);
     updateReadouts();
+    scheduleSave();
   });
 
   thickSlider.addEventListener('input', (e) => {
     diskHalfThickness = parseFloat(e.target.value);
     updateReadouts();
+    scheduleSave();
   });
 
   bendSlider.addEventListener('input', (e) => {
     bend = parseFloat(e.target.value);
     updateReadouts();
+    scheduleSave();
   });
 
   spinSlider.addEventListener('input', (e) => {
     spin = parseFloat(e.target.value);
     updateReadouts();
+    scheduleSave();
   });
 
   progradeToggle.addEventListener('change', (e) => {
     diskPrograde = e.target.checked;
     updateReadouts();
+    scheduleSave();
   });
 
   qualitySlider.addEventListener('input', (e) => {
     quality = parseFloat(e.target.value);
     updateReadouts();
+    scheduleSave();
   });
 
   autoLodToggle.addEventListener('change', (e) => {
     autoLodEnabled = e.target.checked;
     updateReadouts();
+    scheduleSave();
   });
 
   lodMinSlider.addEventListener('input', (e) => {
     lodMin = parseFloat(e.target.value);
     if (lodMin > lodMax - 0.01) lodMax = clamp(lodMin + 0.01, 0.25, 1.0);
     updateReadouts();
+    scheduleSave();
   });
 
   lodMaxSlider.addEventListener('input', (e) => {
     lodMax = parseFloat(e.target.value);
     if (lodMax < lodMin + 0.01) lodMin = clamp(lodMax - 0.01, 0.25, 1.0);
     updateReadouts();
+    scheduleSave();
   });
 
   maxDiskCrossingsSlider.addEventListener('input', (e) => {
     maxDiskCrossings = parseInt(e.target.value, 10);
     updateReadouts();
+    scheduleSave();
   });
 
   exposureSlider.addEventListener('input', (e) => {
     exposure = parseFloat(e.target.value);
     updateReadouts();
+    scheduleSave();
   });
 
   followOrbitToggle.addEventListener('change', (e) => {
@@ -733,11 +857,13 @@
       ? "▸ CAMÉRA ORBITALE — géodésique excentrique (style Interstellar)"
       : "▸ CAMÉRA MANUELLE — Schwarzschild/Kerr-lite",
       followOrbit ? "geodesic" : "");
+    scheduleSave();
   });
 
   emissionModeToggle.addEventListener('change', (e) => {
     ntEmissionMode = e.target.checked;
     updateReadouts();
+    scheduleSave();
   });
 
   modeNormal.addEventListener('click', () => setBloomMode(false));
@@ -748,6 +874,7 @@
     if (key === 'a') setModeBadge('▸ ANALYTIQUE — Luminet Eq.A3');
     if (key === 'g') setModeBadge('▸ GÉODÉSIQUE RK4 — Schwarzschild/Kerr-lite', 'geodesic');
     if (key === 'l') setModeBadge('▸ LUT — mode expérimental', 'lut');
+    if (key === 'r') resetToDefaults();
   });
 
   let dragging = false;
@@ -770,12 +897,16 @@
   window.addEventListener('pointermove', (e) => {
     crosshair.style.left = `${e.clientX}px`;
     crosshair.style.top = `${e.clientY}px`;
-    if (dragging) pointerToParams(e.clientX, e.clientY);
+    if (dragging) {
+      pointerToParams(e.clientX, e.clientY);
+      scheduleSave();
+    }
   });
 
   window.addEventListener('pointerup', () => {
     dragging = false;
     crosshair.style.display = 'none';
+    scheduleSave();
   });
 
   function resize() {
@@ -786,9 +917,10 @@
   }
   window.addEventListener('resize', resize);
   resize();
+  loadSavedState();
   updateReadouts();
-  setBloomMode(false);
-  followOrbitToggle.checked = true;
+  setBloomMode(bloomMode > 0.5);
+  followOrbitToggle.checked = followOrbit;
   followOrbitToggle.dispatchEvent(new Event('change'));
 
   let frames = 0;
