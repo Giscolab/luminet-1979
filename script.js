@@ -1156,36 +1156,69 @@
   });
 
   let dragging = false;
-  function pointerToParams(clientX, clientY) {
-    const xNorm = clientX / window.innerWidth;
-    const yNorm = clientY / window.innerHeight;
-    incl = (5 + yNorm * 85) * Math.PI / 180;
-    rout = 10 + xNorm * 50;
-    camYaw = -180 + xNorm * 360;
-    camPitch = clamp(70 - yNorm * 140, -75, 75);
+  let activePointerId = null;
+  let lastPointerX = 0;
+  let lastPointerY = 0;
+
+  function applyDragDelta(dx, dy, preciseMode) {
+    const precisionFactor = preciseMode ? 0.35 : 1.0;
+    const rotationScale = precisionFactor * 0.22;
+    const diskScaleX = precisionFactor * 0.06;
+    const diskScaleY = precisionFactor * 0.07;
+
+    camYaw = ((camYaw + dx * rotationScale + 540) % 360) - 180;
+    camPitch = clamp(camPitch - dy * rotationScale, -75, 75);
+
+    if (followOrbit) {
+      rout = clamp(rout + dx * diskScaleX, 10, 60);
+      const inclDeg = clamp((incl * 180 / Math.PI) + dy * diskScaleY, 5, 90);
+      incl = inclDeg * Math.PI / 180;
+    }
+
     updateReadouts();
   }
 
-  window.addEventListener('pointerdown', (e) => {
+  function updateCrosshair(clientX, clientY) {
+    crosshair.style.left = `${clientX}px`;
+    crosshair.style.top = `${clientY}px`;
+  }
+
+  canvas.addEventListener('pointerdown', (e) => {
+    if (e.button !== 0) return;
     dragging = true;
+    activePointerId = e.pointerId;
+    lastPointerX = e.clientX;
+    lastPointerY = e.clientY;
+    canvas.setPointerCapture(e.pointerId);
     crosshair.style.display = 'block';
-    pointerToParams(e.clientX, e.clientY);
+    updateCrosshair(e.clientX, e.clientY);
+    e.preventDefault();
   });
 
-  window.addEventListener('pointermove', (e) => {
-    crosshair.style.left = `${e.clientX}px`;
-    crosshair.style.top = `${e.clientY}px`;
-    if (dragging) {
-      pointerToParams(e.clientX, e.clientY);
-      scheduleSave();
-    }
+  canvas.addEventListener('pointermove', (e) => {
+    if (!dragging || e.pointerId !== activePointerId) return;
+    const dx = e.clientX - lastPointerX;
+    const dy = e.clientY - lastPointerY;
+    lastPointerX = e.clientX;
+    lastPointerY = e.clientY;
+    updateCrosshair(e.clientX, e.clientY);
+
+    applyDragDelta(dx, dy, e.shiftKey);
+    scheduleSave();
+    e.preventDefault();
   });
 
-  window.addEventListener('pointerup', () => {
+  function stopDragging(e) {
+    if (!dragging || e.pointerId !== activePointerId) return;
     dragging = false;
+    activePointerId = null;
     crosshair.style.display = 'none';
     scheduleSave();
-  });
+    e.preventDefault();
+  }
+
+  canvas.addEventListener('pointerup', stopDragging);
+  canvas.addEventListener('pointercancel', stopDragging);
 
   function resize() {
     const dpr = window.devicePixelRatio || 1;
